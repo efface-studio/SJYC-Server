@@ -53,6 +53,7 @@ model User {
   sessions      Session[]
   authTokens    AuthToken[]
   notifications Notification[]
+  applications  ProgramApplication[]
 }
 
 /// 로그인 세션 — 쿠키에는 원문 토큰, DB 에는 SHA-256 해시만 둔다
@@ -111,5 +112,74 @@ model Notification {
   createdAt DateTime         @default(now())
   readAt    DateTime?
 
+  @@index([userId, createdAt])
+}
+
+// ───── 프로그램 ─────
+
+enum PublishStatus {
+  draft
+  published
+  hidden
+}
+
+enum ApplicationStatus {
+  submitted
+  approved
+  rejected
+  cancelled
+}
+
+model ProgramCategory {
+  id        String    @id
+  name      String
+  group     String
+  sortOrder Int       @default(0)
+  programs  Program[]
+}
+
+model Program {
+  id              String               @id @default(cuid())
+  title           String
+  categoryId      String
+  category        ProgramCategory      @relation(fields: [categoryId], references: [id])
+  summary         String
+  description     String
+  target          String
+  place           String
+  startsAt        DateTime
+  endsAt          DateTime
+  recruitStartsAt DateTime
+  recruitEndsAt   DateTime
+  capacity        Int
+  /// 접수·승인 상태 신청 수 (신청·취소·반려와 같은 트랜잭션에서 갱신)
+  appliedCount    Int                  @default(0)
+  status          PublishStatus        @default(draft)
+  cancelDeadline  DateTime
+  createdAt       DateTime             @default(now())
+  updatedAt       DateTime             @updatedAt
+  applications    ProgramApplication[]
+
+  @@index([status, recruitEndsAt])
+}
+
+model ProgramApplication {
+  id            String            @id @default(cuid())
+  /// 서버가 발급한 접수 번호 (SJYC-연도-일련번호)
+  receiptNo     String            @unique
+  programId     String
+  program       Program           @relation(fields: [programId], references: [id])
+  userId        String
+  user          User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  applicantName String
+  phone         String
+  note          String
+  status        ApplicationStatus @default(submitted)
+  /// StatusHistoryEntry[]
+  history       Json              @default("[]")
+  createdAt     DateTime          @default(now())
+  updatedAt     DateTime          @updatedAt
+
+  @@index([programId, status])
   @@index([userId, createdAt])
 }
