@@ -1,7 +1,9 @@
-import { Controller, Get, Module, Param, Query } from '@nestjs/common';
+import { Body, Controller, Get, Module, Param, Post, Query } from '@nestjs/common';
+import type { User as UserRow } from '@prisma/client';
 import { z } from 'zod';
-import { Public } from '../common/auth';
-import { ZodPipe } from '../common/zod.pipe';
+import { CurrentUser, Public } from '../common/auth';
+import { apiInput, ZodPipe } from '../common/zod.pipe';
+import { type ReservationInput, reservationSchema } from '../shared/domain/schemas';
 import { SpacesService } from './spaces.service';
 
 const dateQuery = z.object({
@@ -28,6 +30,25 @@ export class SpacesController {
   @Get('spaces/:id/availability')
   availability(@Param('id') id: string, @Query(new ZodPipe(dateQuery)) q: z.infer<typeof dateQuery>) {
     return this.spaces.availability(id, q.date);
+  }
+
+  @Post('spaces/:id/reservations')
+  reserve(
+    @CurrentUser() me: UserRow,
+    @Param('id') id: string,
+    @Body(new ZodPipe(apiInput(reservationSchema))) input: ReservationInput,
+  ) {
+    return this.spaces.reserve(me, id, input);
+  }
+
+  @Get('me/reservations')
+  mine(@CurrentUser() me: UserRow) {
+    return this.spaces.mine(me.id);
+  }
+
+  @Post('me/reservations/:id/cancel')
+  cancel(@CurrentUser() me: UserRow, @Param('id') id: string) {
+    return this.spaces.cancel(me.id, id);
   }
 }
 
