@@ -14,6 +14,11 @@ export class RateLimitService {
     return n > limit;
   }
 
+  /** 현재 창의 횟수 (늘리지 않고 확인만) */
+  async count(key: string): Promise<number> {
+    return Number((await this.redis.get(`rl:${key}`)) ?? 0);
+  }
+
   async reset(key: string): Promise<void> {
     await this.redis.del(`rl:${key}`);
   }
