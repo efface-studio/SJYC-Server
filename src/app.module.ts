@@ -7,11 +7,22 @@ import { HttpExceptionFilter } from './common/http-exception.filter';
 import { RateLimitModule } from './common/rate-limit';
 import { HealthModule } from './health/health.controller';
 import { MailModule } from './mail/mail.service';
+import { MeModule } from './me/me.controller';
+import { NotificationsModule } from './notifications/notifications.service';
 import { PrismaModule } from './prisma/prisma.service';
 import { RedisModule } from './redis/redis.service';
 
 @Module({
-  imports: [PrismaModule, RedisModule, RateLimitModule, MailModule, HealthModule, AuthModule],
+  imports: [
+    PrismaModule,
+    RedisModule,
+    RateLimitModule,
+    MailModule,
+    NotificationsModule,
+    HealthModule,
+    AuthModule,
+    MeModule,
+  ],
   providers: [
     { provide: APP_FILTER, useClass: HttpExceptionFilter },
     { provide: APP_INTERCEPTOR, useClass: EnvelopeInterceptor },
