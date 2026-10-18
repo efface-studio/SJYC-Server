@@ -77,3 +77,15 @@ export async function createProgram(
     },
   });
 }
+
+export async function createSpace(t: TestContext, opts: { capacity?: number; reservable?: boolean } = {}) {
+  return t.prisma.space.create({
+    data: {
+      name: `공간 ${Date.now()}${++n}`,
+      floor: '3층',
+      capacity: opts.capacity ?? 10,
+      description: '설명',
+      reservable: opts.reservable ?? true,
+    },
+  });
+}
