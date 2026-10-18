@@ -105,3 +105,9 @@
 - 회차를 만들 때 명단(동아리원 / 승인된 신청자, 활동 회원만)을 채우고 대상 이름을 기록한다. 출석률은 공유 `memberStats`·`attendanceRate` 로 계산한다.
 - 출석 코드: `crypto.randomInt` 4자리, 열려 있는 다른 회차와 겹치지 않게, 10분 뒤 자동 마감. 틀린 코드는 회원별 Redis 카운터로 5번이면 10분 잠근다. 담당자가 이미 체크한 기록은 본인 체크인이 덮어쓰지 않는다.
 - 담당자 운영(`/manage/clubs/*`): 공유 `canManageClub` 으로 동아리마다 검사. 명단은 연락처를 포함하므로 담당자·직원에게만 내려준다. 가입 처리는 관리자 처리와 같은 로직(`decideClubApplication`)을 쓰되 다른 동아리 신청은 404.
+
+## 시드 (개발·시연용)
+
+- `pnpm db:seed` — 웹 mock 과 같은 샘플·참고 데이터(`src/shared/mock`, `pnpm sync:shared` 로 복사)를 넣는다. 데모 계정 비밀번호는 argon2 해시로만 저장한다.
+- 이미 데이터가 있으면 거부, `pnpm db:seed --reset` 은 모든 테이블을 비우고 다시 넣는다.
+- `NODE_ENV=production` 에서는 `SEED_DEMO=1` 일 때만 실행된다 — 시연 서버 전용이며 실제 센터 운영 DB 에는 쓰지 않는다.
