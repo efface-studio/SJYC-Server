@@ -4,6 +4,8 @@ import { z } from 'zod';
 import { AuthModule } from '../auth/auth.controller';
 import { CurrentUser, RequirePermission } from '../common/auth';
 import { ZodPipe } from '../common/zod.pipe';
+import { AdminContentController } from './admin-content.controller';
+import { AdminContentService } from './admin-content.service';
 import { type AdminListQuery, adminListQuery } from './admin-query';
 import { AdminService, type MemberPatch } from './admin.service';
 
@@ -64,5 +66,9 @@ export class AdminController {
   }
 }
 
-@Module({ imports: [AuthModule], controllers: [AdminController], providers: [AdminService] })
+@Module({
+  imports: [AuthModule],
+  controllers: [AdminController, AdminContentController],
+  providers: [AdminService, AdminContentService],
+})
 export class AdminModule {}
