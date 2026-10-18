@@ -59,6 +59,7 @@ model User {
   clubApplications ClubApplication[]
   inquiries        Inquiry[]
   managedClubs     ClubManager[]
+  attendance       AttendanceRecord[]
 }
 
 /// 로그인 세션 — 쿠키에는 원문 토큰, DB 에는 SHA-256 해시만 둔다
@@ -443,5 +444,58 @@ model ClubManager {
   assignedAt DateTime @default(now())
 
   @@id([clubId, userId])
+  @@index([userId])
+}
+
+enum AttendanceTargetType {
+  club
+  program
+}
+
+enum AttendanceStatus {
+  present
+  late
+  absent
+  excused
+}
+
+enum AttendanceMethod {
+  self
+  manager
+}
+
+/// 출석부 한 회차 — 대상(동아리·프로그램)의 명단을 만들 때 채운다
+model AttendanceSession {
+  id              String               @id @default(cuid())
+  targetType      AttendanceTargetType
+  targetId        String
+  /// 만들 때의 대상 이름
+  targetName      String
+  /// YYYY-MM-DD (KST)
+  date            String
+  title           String
+  /// 본인 출석용 4자리 코드 — 열려 있을 때만
+  checkInCode     String?
+  checkInClosesAt DateTime?
+  createdBy       String
+  createdAt       DateTime             @default(now())
+  records         AttendanceRecord[]
+
+  @@index([targetType, targetId, date])
+  @@index([checkInCode])
+}
+
+model AttendanceRecord {
+  sessionId String
+  session   AttendanceSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name      String
+  status    AttendanceStatus?
+  checkedAt DateTime?
+  method    AttendanceMethod?
+  note      String?
+
+  @@id([sessionId, userId])
   @@index([userId])
 }
