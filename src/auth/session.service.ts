@@ -1,0 +1,73 @@
+import { Injectable } from '@nestjs/common';
+import type { User as UserRow } from '@prisma/client';
+import type { Response } from 'express';
+import { env, isProd } from '../config/env';
+import { PrismaService } from '../prisma/prisma.service';
+import { hashToken, randomToken } from './tokens';
+
+export const SESSION_COOKIE = 'sjyc_session';
+
+export type AuthUser = UserRow;
+
+export interface ResolvedSession {
+  user: AuthUser;
+  expiresAt: Date;
+  renewed: boolean;
+}
+
+@Injectable()
+export class SessionService {
+  constructor(private readonly prisma: PrismaService) {}
+
+  private ttlMs() {
+    return env().SESSION_TTL_HOURS * 3_600_000;
+  }
+
+  async create(userId: string, userAgent?: string): Promise<{ token: string; expiresAt: Date }> {
+    const token = randomToken();
+    const expiresAt = new Date(Date.now() + this.ttlMs());
+    await this.prisma.session.create({
+      data: { tokenHash: hashToken(token), userId, expiresAt, userAgent: userAgent?.slice(0, 200) },
+    });
+    return { token, expiresAt };
+  }
+
+  /** 유효한 세션이면 회원을 돌려준다. 활동 중인 회원만, 절반 이상 지났으면 만료를 연장한다 */
+  async resolve(token: string): Promise<ResolvedSession | null> {
+    const s = await this.prisma.session.findUnique({
+      where: { tokenHash: hashToken(token) },
+      include: { user: true },
+    });
+    if (!s || s.expiresAt.getTime() <= Date.now() || s.user.status !== 'active') return null;
+    if (s.expiresAt.getTime() - Date.now() >= this.ttlMs() / 2) {
+      return { user: s.user, expiresAt: s.expiresAt, renewed: false };
+    }
+    const expiresAt = new Date(Date.now() + this.ttlMs());
+    await this.prisma.session.update({ where: { id: s.id }, data: { expiresAt } });
+    return { user: s.user, expiresAt, renewed: true };
+  }
+
+  async revoke(token: string): Promise<void> {
+    await this.prisma.session.deleteMany({ where: { tokenHash: hashToken(token) } });
+  }
+
+  /** 비밀번호 재설정·탈퇴·정지 시 모든 기기에서 로그아웃 */
+  async revokeAll(userId: string): Promise<void> {
+    await this.prisma.session.deleteMany({ where: { userId } });
+  }
+
+  setCookie(res: Response, token: string, expiresAt: Date): void {
+    res.cookie(SESSION_COOKIE, token, {
+      httpOnly: true,
+      sameSite: 'lax',
+      secure: isProd(),
+      domain: env().COOKIE_DOMAIN,
+      path: '/',
+      expires: expiresAt,
+    });
+  }
+
+  clearCookie(res: Response): void {
+    res.clearCookie(SESSION_COOKIE, { path: '/', domain: env().COOKIE_DOMAIN });
+  }
+}

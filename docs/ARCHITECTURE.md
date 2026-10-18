@@ -36,3 +36,18 @@
 - `test/*.spec.ts`: 실제 PostgreSQL(`sjyc_test`)·Redis(db 15)로 앱을 띄우는 통합 테스트. 실행 전 마이그레이션 적용 후 모든 테이블을 비운다 (DB 이름이 `_test` 로 끝나지 않으면 거부).
 - `src/**/*.test.ts`: 단위 테스트.
 - 외부 연동(메일 등)은 테스트 더블로 교체한다.
+
+## 인증 (`/auth`)
+
+| 경로                                                                                   | 내용                                                                                 |
+| -------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------ |
+| `GET /auth/session`                                                                    | 현재 세션 `{ user, expiresAt }`, 없으면 401                                          |
+| `POST /auth/signup`                                                                    | 가입 + 인증 메일. 중복 이메일 409 `EMAIL_TAKEN`                                      |
+| `POST /auth/email-verification/resend` · `GET /auth/email-verification/confirm?token=` | 재발송(가입 여부 무관 204) · 메일 링크 확인 후 웹 `/login?verified=1` 로 이동        |
+| `POST /auth/login` · `POST /auth/logout`                                               | 세션 쿠키 발급·폐기. 틀린 비밀번호와 없는 계정은 같은 오류, IP+이메일 15분 10회 제한 |
+| `POST /auth/password-reset` · `POST /auth/password-reset/confirm`                      | 가입 여부 무관 204, 30분 1회용 링크, 재설정 시 모든 세션 폐기                        |
+| `GET /auth/oauth/{provider}/start`                                                     | 공급자 키 발급 전에는 웹 `/login?error=oauth_failed` 로 안내                         |
+
+- 비밀번호: argon2id. 토큰(세션·인증 메일·재설정)은 256bit 임의 값, DB 에는 SHA-256 해시만 저장한다.
+- 세션 유효 시간 `SESSION_TTL_HOURS`(기본 12시간), 절반 지나면 연장. 정지·탈퇴 회원의 세션은 즉시 무효.
+- 권한: 전역 `AuthGuard` 가 기본으로 로그인을 요구하고(`@Public` 예외), `@RequirePermission` 은 공유 `can()` 으로 검사한다.

@@ -9,3 +9,79 @@ datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
 }
+
+// ───── 회원·인증 ─────
+
+enum Role {
+  member
+  staff
+  admin
+  developer
+}
+
+enum UserStatus {
+  active
+  suspended
+  withdrawn
+}
+
+enum OAuthProvider {
+  kakao
+  naver
+  apple
+  google
+}
+
+model User {
+  id            String          @id @default(cuid())
+  /// 소문자로 저장한다
+  email         String          @unique
+  name          String
+  phone         String?
+  birthYear     Int?
+  /// argon2id. 소셜 로그인 전용 계정은 비어 있다
+  passwordHash  String?
+  roles         Role[]          @default([member])
+  status        UserStatus      @default(active)
+  emailVerified Boolean         @default(false)
+  providers     OAuthProvider[] @default([])
+  /// ConsentRecord[] — 약관·개인정보·마케팅 동의 이력
+  consents      Json            @default("[]")
+  createdAt     DateTime        @default(now())
+  updatedAt     DateTime        @updatedAt
+
+  sessions   Session[]
+  authTokens AuthToken[]
+}
+
+/// 로그인 세션 — 쿠키에는 원문 토큰, DB 에는 SHA-256 해시만 둔다
+model Session {
+  id        String   @id @default(cuid())
+  tokenHash String   @unique
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt DateTime
+  userAgent String?
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+}
+
+enum AuthTokenPurpose {
+  verify_email
+  reset_password
+}
+
+/// 이메일 인증·비밀번호 재설정 1회용 토큰 (해시만 저장)
+model AuthToken {
+  id        String           @id @default(cuid())
+  tokenHash String           @unique
+  purpose   AuthTokenPurpose
+  userId    String
+  user      User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime         @default(now())
+
+  @@index([userId, purpose])
+}
