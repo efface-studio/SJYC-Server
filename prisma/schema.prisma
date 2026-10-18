@@ -1,0 +1,11 @@
+// 데이터 모델 — 웹 저장소의 도메인 타입(src/shared/domain/types.ts)과 1:1 로 맞춘다.
+// 열거형 값은 도메인 문자열과 같게(소문자) 두어 응답 변환을 단순하게 한다.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
