@@ -50,11 +50,13 @@ model User {
   createdAt     DateTime        @default(now())
   updatedAt     DateTime        @updatedAt
 
-  sessions      Session[]
-  authTokens    AuthToken[]
-  notifications Notification[]
-  applications  ProgramApplication[]
-  reservations  SpaceReservation[]
+  sessions         Session[]
+  authTokens       AuthToken[]
+  notifications    Notification[]
+  applications     ProgramApplication[]
+  reservations     SpaceReservation[]
+  memberships      ClubMembership[]
+  clubApplications ClubApplication[]
 }
 
 /// 로그인 세션 — 쿠키에는 원문 토큰, DB 에는 SHA-256 해시만 둔다
@@ -229,4 +231,91 @@ model SpaceReservation {
 
   @@index([spaceId, date, status])
   @@index([userId, date])
+}
+
+enum ClubStatus {
+  active
+  inactive
+}
+
+enum ClubRole {
+  leader
+  member
+}
+
+enum ClubPostKind {
+  notice
+  schedule
+  activity
+}
+
+enum ClubApplicationStatus {
+  pending
+  approved
+  rejected
+  cancelled
+}
+
+model Club {
+  id           String            @id @default(cuid())
+  name         String
+  field        String
+  summary      String
+  description  String
+  meetingInfo  String
+  target       String?
+  recruiting   Boolean           @default(false)
+  status       ClubStatus        @default(active)
+  /// MediaPhoto[] — 공식 채널 사진, 출처 포함
+  photos       Json              @default("[]")
+  /// ClubActivity[]
+  activities   Json              @default("[]")
+  sourceUrls   String[]          @default([])
+  sortOrder    Int               @default(0)
+  createdAt    DateTime          @default(now())
+  updatedAt    DateTime          @updatedAt
+  memberships  ClubMembership[]
+  posts        ClubPost[]
+  applications ClubApplication[]
+}
+
+model ClubMembership {
+  clubId   String
+  club     Club     @relation(fields: [clubId], references: [id], onDelete: Cascade)
+  userId   String
+  user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role     ClubRole @default(member)
+  joinedAt DateTime @default(now())
+
+  @@id([clubId, userId])
+  @@index([userId])
+}
+
+model ClubPost {
+  id     String       @id @default(cuid())
+  clubId String
+  club   Club         @relation(fields: [clubId], references: [id], onDelete: Cascade)
+  kind   ClubPostKind
+  title  String
+  body   String
+  at     DateTime     @default(now())
+
+  @@index([clubId, at])
+}
+
+model ClubApplication {
+  id            String                @id @default(cuid())
+  clubId        String
+  club          Club                  @relation(fields: [clubId], references: [id], onDelete: Cascade)
+  userId        String
+  user          User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  applicantName String
+  motivation    String
+  status        ClubApplicationStatus @default(pending)
+  reason        String?
+  createdAt     DateTime              @default(now())
+  updatedAt     DateTime              @updatedAt
+
+  @@index([clubId, status])
+  @@index([userId, createdAt])
 }
