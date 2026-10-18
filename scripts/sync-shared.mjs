@@ -41,6 +41,11 @@ for (const [from, to] of FILES) {
 // mock 파일의 웹 별칭(@/domain, @/lib)을 상대 경로로 바꾼다
 for (const file of ['mock/seed.ts', 'mock/research.ts']) {
   const path = join(target, file);
-  writeFileSync(path, readFileSync(path, 'utf8').replaceAll("from '@/domain/", "from '../domain/").replaceAll("from '@/lib/", "from '../lib/"));
+  writeFileSync(
+    path,
+    readFileSync(path, 'utf8')
+      .replaceAll("from '@/domain/", "from '../domain/")
+      .replaceAll("from '@/lib/", "from '../lib/"),
+  );
 }
 console.log(`synced ${FILES.length} files from ${client}`);
