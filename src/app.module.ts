@@ -9,6 +9,7 @@ import { HealthModule } from './health/health.controller';
 import { MailModule } from './mail/mail.service';
 import { MeModule } from './me/me.controller';
 import { NotificationsModule } from './notifications/notifications.service';
+import { ProgramsModule } from './programs/programs.controller';
 import { PrismaModule } from './prisma/prisma.service';
 import { RedisModule } from './redis/redis.service';
 
@@ -22,6 +23,7 @@ import { RedisModule } from './redis/redis.service';
     HealthModule,
     AuthModule,
     MeModule,
+    ProgramsModule,
   ],
   providers: [
     { provide: APP_FILTER, useClass: HttpExceptionFilter },
