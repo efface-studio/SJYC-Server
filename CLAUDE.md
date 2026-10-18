@@ -12,7 +12,8 @@
   - 인프라: `pnpm infra:up` (PostgreSQL 5434 · Redis 6381)
   - 개발: `cp .env.example .env && pnpm db:migrate && pnpm dev` (http://localhost:4000/api/v1)
   - 검증: `pnpm format:check && pnpm typecheck && pnpm lint && pnpm test && pnpm build`
-  - 도메인 규칙 동기화: `pnpm sync:shared` (웹 저장소의 `src/domain`·`src/lib/format.ts`·`src/api/errors.ts` → `src/shared`)
+  - 도메인 규칙 동기화: `pnpm sync:shared` (웹 저장소의 `src/domain`·`src/lib/format.ts`·`src/api/errors.ts`·mock 시드 → `src/shared`)
+  - 개발·시연 데이터: `pnpm db:seed` (`--reset` 으로 다시 넣기, 운영 환경은 `SEED_DEMO=1` 일 때만)
 - **기본 브랜치**: `main`
 - **기타 규칙**:
   - 응답·경로·오류 코드는 웹 http 어댑터(`src/api/http.ts`) 계약을 따른다. 바꾸면 웹·앱과 함께 바꾼다.
