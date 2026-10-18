@@ -1,0 +1,51 @@
+import { z } from 'zod';
+
+const schema = z.object({
+  NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
+  PORT: z.coerce.number().int().positive().default(4000),
+  DATABASE_URL: z.string().min(1),
+  REDIS_URL: z.string().min(1),
+  WEB_ORIGIN: z.string().default('http://localhost:3000'),
+  WEB_PUBLIC_URL: z.url().default('http://localhost:3000'),
+  API_PUBLIC_URL: z.url().default('http://localhost:4000/api/v1'),
+  COOKIE_DOMAIN: z
+    .string()
+    .optional()
+    .transform((v) => v || undefined),
+  SESSION_TTL_HOURS: z.coerce
+    .number()
+    .int()
+    .min(1)
+    .max(24 * 30)
+    .default(12),
+});
+
+export type Env = z.infer<typeof schema>;
+
+let cached: Env | null = null;
+
+/** 환경 변수 — 처음 읽을 때 검증하고, 잘못되면 어떤 값이 문제인지 알려 주고 기동을 멈춘다 */
+export function env(): Env {
+  if (cached) return cached;
+  const parsed = schema.safeParse(process.env);
+  if (!parsed.success) {
+    const detail = parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join(', ');
+    throw new Error(`환경 변수가 올바르지 않습니다 — ${detail}`);
+  }
+  cached = parsed.data;
+  return cached;
+}
+
+/** 테스트에서 환경 변수를 바꾼 뒤 다시 읽게 한다 */
+export function resetEnvCache(): void {
+  cached = null;
+}
+
+export const isProd = () => env().NODE_ENV === 'production';
+
+/** CORS·CSRF 에서 허용하는 웹 Origin 목록 */
+export const webOrigins = () =>
+  env()
+    .WEB_ORIGIN.split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
