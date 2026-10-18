@@ -12,6 +12,9 @@ const schema = z.object({
     .string()
     .optional()
     .transform((v) => v || undefined),
+  /** 비우면 메일을 보내지 않고 로그로 남긴다 (운영은 필수) */
+  SMTP_URL: z.string().optional(),
+  MAIL_FROM: z.string().default('중구청소년센터 <no-reply@localhost>'),
   SESSION_TTL_HOURS: z.coerce
     .number()
     .int()
@@ -31,6 +34,9 @@ export function env(): Env {
   if (!parsed.success) {
     const detail = parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join(', ');
     throw new Error(`환경 변수가 올바르지 않습니다 — ${detail}`);
+  }
+  if (parsed.data.NODE_ENV === 'production' && !parsed.data.SMTP_URL) {
+    throw new Error('환경 변수가 올바르지 않습니다 — 운영에서는 SMTP_URL 이 필요합니다 (인증·재설정 메일)');
   }
   cached = parsed.data;
   return cached;
