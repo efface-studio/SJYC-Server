@@ -9,6 +9,7 @@ import { HealthModule } from './health/health.controller';
 import { MailModule } from './mail/mail.service';
 import { MeModule } from './me/me.controller';
 import { NotificationsModule } from './notifications/notifications.service';
+import { ContentModule } from './content/content.controller';
 import { ClubsModule } from './clubs/clubs.controller';
 import { ProgramsModule } from './programs/programs.controller';
 import { SpacesModule } from './spaces/spaces.controller';
@@ -28,6 +29,7 @@ import { RedisModule } from './redis/redis.service';
     ProgramsModule,
     SpacesModule,
     ClubsModule,
+    ContentModule,
   ],
   providers: [
     { provide: APP_FILTER, useClass: HttpExceptionFilter },
