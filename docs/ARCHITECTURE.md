@@ -77,3 +77,10 @@
 - FAQ 는 공개된 것만 `order` 순, 정책 문서는 키(`privacy`, `terms` …)로 조회한다. 확정본이 아니면 `confirmed=false` 로 내려 화면이 안내한다.
 - 센터 소식(사진·영상)은 출처 주소와 함께 보관하고 날짜 최신순(날짜 미상은 뒤)으로 보여준다.
 - 1:1 문의는 회원당 시간당 10건으로 제한한다. 본인 문의만 조회되며 다른 사람의 문의는 404 다.
+
+## 관리자 기본
+
+- 모든 관리자 API 는 `@RequirePermission` 으로 공유 `can()` 을 검사한다 (`admin.access`, `member.read`, `member.manage`, `audit.read` …).
+- 회원 역할·상태 변경: 자기 자신은 바꿀 수 없고, 개발자 계정·개발자 역할은 개발자만 다룬다(공유 `canManageUser`·`assignableRoles`). 정지·탈퇴로 바꾸면 그 회원의 세션을 즉시 모두 폐기한다.
+- 감사 로그: 관리자 변경은 전역 `AuditService.record` 로 변경과 같은 트랜잭션에 남긴다. 행위자가 탈퇴해도 이름은 남는다.
+- 세션·로그인 응답의 `user.managedClubIds` 는 `ClubManager` 에서 계산한다 (동아리 담당자 권한 판단용).

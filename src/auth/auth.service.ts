@@ -103,7 +103,11 @@ export class AuthService {
     }
     await this.limiter.reset(key);
     const session = await this.sessions.create(user.id, userAgent);
-    return { user, ...session };
+    const managed = await this.prisma.clubManager.findMany({
+      where: { userId: user.id },
+      select: { clubId: true },
+    });
+    return { user: { ...user, managedClubIds: managed.map((m) => m.clubId) }, ...session };
   }
 
   /** 가입 여부를 드러내지 않도록 항상 같은 응답 */

@@ -7,7 +7,8 @@ import { hashToken, randomToken } from './tokens';
 
 export const SESSION_COOKIE = 'sjyc_session';
 
-export type AuthUser = UserRow;
+/** 세션의 회원 + 담당 동아리 ID (권한 판단에 쓴다) */
+export type AuthUser = UserRow & { managedClubIds: string[] };
 
 export interface ResolvedSession {
   user: AuthUser;
@@ -36,15 +37,17 @@ export class SessionService {
   async resolve(token: string): Promise<ResolvedSession | null> {
     const s = await this.prisma.session.findUnique({
       where: { tokenHash: hashToken(token) },
-      include: { user: true },
+      include: { user: { include: { managedClubs: { select: { clubId: true } } } } },
     });
     if (!s || s.expiresAt.getTime() <= Date.now() || s.user.status !== 'active') return null;
+    const { managedClubs, ...row } = s.user;
+    const user: AuthUser = { ...row, managedClubIds: managedClubs.map((m) => m.clubId) };
     if (s.expiresAt.getTime() - Date.now() >= this.ttlMs() / 2) {
-      return { user: s.user, expiresAt: s.expiresAt, renewed: false };
+      return { user, expiresAt: s.expiresAt, renewed: false };
     }
     const expiresAt = new Date(Date.now() + this.ttlMs());
     await this.prisma.session.update({ where: { id: s.id }, data: { expiresAt } });
-    return { user: s.user, expiresAt, renewed: true };
+    return { user, expiresAt, renewed: true };
   }
 
   async revoke(token: string): Promise<void> {

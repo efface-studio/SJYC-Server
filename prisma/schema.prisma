@@ -58,6 +58,7 @@ model User {
   memberships      ClubMembership[]
   clubApplications ClubApplication[]
   inquiries        Inquiry[]
+  managedClubs     ClubManager[]
 }
 
 /// 로그인 세션 — 쿠키에는 원문 토큰, DB 에는 SHA-256 해시만 둔다
@@ -278,6 +279,7 @@ model Club {
   memberships  ClubMembership[]
   posts        ClubPost[]
   applications ClubApplication[]
+  managers     ClubManager[]
 }
 
 model ClubMembership {
@@ -414,4 +416,32 @@ model Inquiry {
 
   @@index([userId, createdAt])
   @@index([status, createdAt])
+}
+
+/// 관리자 작업 기록 — 누가 언제 무엇을 바꿨는지
+model AuditEvent {
+  id         String   @id @default(cuid())
+  at         DateTime @default(now())
+  /// 행위자가 탈퇴해도 기록은 남긴다
+  actorId    String?
+  actorName  String
+  action     String
+  /// AuditEvent['targetType'] (notice, program, user, ...)
+  targetType String
+  targetId   String
+  summary    String
+
+  @@index([at])
+}
+
+/// 동아리별 담당자 — 센터 직원이 회원을 지정하고, 그 동아리의 운영(회원·가입·출석·소식·소개)을 맡긴다
+model ClubManager {
+  clubId     String
+  club       Club     @relation(fields: [clubId], references: [id], onDelete: Cascade)
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  assignedAt DateTime @default(now())
+
+  @@id([clubId, userId])
+  @@index([userId])
 }
