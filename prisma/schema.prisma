@@ -415,3 +415,19 @@ model Inquiry {
   @@index([userId, createdAt])
   @@index([status, createdAt])
 }
+
+/// 관리자 작업 기록 — 누가 언제 무엇을 바꿨는지
+model AuditEvent {
+  id         String   @id @default(cuid())
+  at         DateTime @default(now())
+  /// 행위자가 탈퇴해도 기록은 남긴다
+  actorId    String?
+  actorName  String
+  action     String
+  /// AuditEvent['targetType'] (notice, program, user, ...)
+  targetType String
+  targetId   String
+  summary    String
+
+  @@index([at])
+}
