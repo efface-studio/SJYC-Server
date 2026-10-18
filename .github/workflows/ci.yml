@@ -1,0 +1,63 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: sjyc
+          POSTGRES_PASSWORD: sjyc
+          POSTGRES_DB: sjyc_test
+        ports: ['5434:5432']
+        options: >-
+          --health-cmd "pg_isready -U sjyc" --health-interval 5s --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports: ['6381:6379']
+        options: >-
+          --health-cmd "redis-cli ping" --health-interval 5s --health-retries 10
+    env:
+      CI: 'true'
+      DATABASE_URL: postgresql://sjyc:sjyc@localhost:5434/sjyc_test
+      DATABASE_URL_TEST: postgresql://sjyc:sjyc@localhost:5434/sjyc_test
+      REDIS_URL: redis://localhost:6381/15
+      REDIS_URL_TEST: redis://localhost:6381/15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Format check
+        run: pnpm format:check
+
+      - name: Type check
+        run: pnpm typecheck
+
+      - name: Lint
+        run: pnpm lint
+
+      - name: Test
+        run: pnpm test
+
+      - name: Build
+        run: pnpm build
