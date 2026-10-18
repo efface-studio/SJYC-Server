@@ -54,6 +54,7 @@ model User {
   authTokens    AuthToken[]
   notifications Notification[]
   applications  ProgramApplication[]
+  reservations  SpaceReservation[]
 }
 
 /// 로그인 세션 — 쿠키에는 원문 토큰, DB 에는 SHA-256 해시만 둔다
@@ -182,4 +183,50 @@ model ProgramApplication {
 
   @@index([programId, status])
   @@index([userId, createdAt])
+}
+
+enum ReservationStatus {
+  pending
+  approved
+  rejected
+  cancelled
+}
+
+model Space {
+  id           String             @id @default(cuid())
+  name         String
+  floor        String
+  capacity     Int
+  description  String
+  /// 예약 접수 여부 (휴관·점검 시 관리자가 끈다)
+  reservable   Boolean            @default(true)
+  sortOrder    Int                @default(0)
+  createdAt    DateTime           @default(now())
+  updatedAt    DateTime           @updatedAt
+  reservations SpaceReservation[]
+}
+
+model SpaceReservation {
+  id            String            @id @default(cuid())
+  spaceId       String
+  space         Space             @relation(fields: [spaceId], references: [id])
+  userId        String
+  user          User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  applicantName String
+  /// 하이픈 없는 숫자만
+  phone         String
+  /// 이용일 YYYY-MM-DD (KST 달력 날짜)
+  date          String
+  /// HH:MM
+  startTime     String
+  endTime       String
+  headcount     Int
+  purpose       String
+  status        ReservationStatus @default(pending)
+  reason        String?
+  createdAt     DateTime          @default(now())
+  updatedAt     DateTime          @updatedAt
+
+  @@index([spaceId, date, status])
+  @@index([userId, date])
 }
