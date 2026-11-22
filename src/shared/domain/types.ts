@@ -425,6 +425,7 @@ export interface AuditEvent {
     | 'inquiry'
     | 'faq'
     | 'policy'
+    | 'site_settings'
     | 'attendance';
   targetId: string;
   summary: string;

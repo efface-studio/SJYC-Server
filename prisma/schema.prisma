@@ -499,3 +499,9 @@ model AttendanceRecord {
   @@id([sessionId, userId])
   @@index([userId])
 }
+
+model SiteSettings {
+  id      String @id
+  version Int
+  values  Json
+}

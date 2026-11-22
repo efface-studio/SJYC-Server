@@ -18,6 +18,7 @@ if (!client) {
 
 /** [원본, 대상] — 모두 DOM·Next 에 의존하지 않는 순수 TS */
 const FILES = [
+  ['src/domain/site-settings.ts', 'domain/site-settings.ts'],
   ['src/domain/types.ts', 'domain/types.ts'],
   ['src/domain/schemas.ts', 'domain/schemas.ts'],
   ['src/domain/permissions.ts', 'domain/permissions.ts'],

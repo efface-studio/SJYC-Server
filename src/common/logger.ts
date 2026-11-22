@@ -43,8 +43,8 @@ export const logger = pino({
 
 export const httpLogger = pinoHttp({
   logger,
-  genReqId: (req, res) => {
-    const id = (req.headers['x-request-id'] as string | undefined) ?? randomUUID();
+  genReqId: (_req, res) => {
+    const id = randomUUID();
     res.setHeader('x-request-id', id);
     return id;
   },
