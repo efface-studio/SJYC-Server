@@ -1,6 +1,6 @@
 import { SocialController } from './social.controller';
 import { SocialService } from './social.service';
-import { Body, Controller, Get, HttpCode, Module, Param, Post, Query, Req, Res } from '@nestjs/common';
+import { Body, Controller, Get, HttpCode, Module, Post, Query, Req, Res } from '@nestjs/common';
 import type { Request, Response } from 'express';
 import { z } from 'zod';
 import { AppException } from '../common/app-exception';
@@ -22,7 +22,6 @@ import { AuthService } from './auth.service';
 import { SessionService } from './session.service';
 
 const resetConfirmSchema = z.object({ token: z.string().min(1).max(200), password: z.string() });
-const OAUTH_PROVIDERS = new Set(['kakao', 'naver', 'apple', 'google']);
 
 @Controller('auth')
 export class AuthController {
@@ -97,17 +96,6 @@ export class AuthController {
     // 비밀번호 규칙은 웹 폼 스키마와 같게 검사한다
     new ZodPipe(resetPasswordSchema).transform({ password: body.password, passwordConfirm: body.password });
     await this.auth.resetPassword(body.token, body.password);
-  }
-
-  /**
-   * 소셜 로그인 시작. 공급자 키가 발급되기 전에는 웹 로그인 화면으로 안내한다
-   * (인가 요청·state·PKCE·토큰 교환은 키 발급 후 이 경로에서 서버가 처리한다).
-   */
-  @Public()
-  @Get('oauth/:provider/start')
-  oauthStart(@Param('provider') provider: string, @Res() res: Response): void {
-    if (!OAUTH_PROVIDERS.has(provider)) throw new AppException('NOT_FOUND');
-    res.redirect(`${env().WEB_PUBLIC_URL}/login?error=oauth_failed`);
   }
 }
 

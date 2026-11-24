@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import type { OAuthProvider } from '@prisma/client';
-import { createRemoteJWKSet, jwtVerify } from 'jose';
+import { createRemoteJWKSet, importPKCS8, jwtVerify, SignJWT } from 'jose';
 import { z } from 'zod';
 import { AppException } from '../common/app-exception';
 import { env } from '../config/env';
@@ -26,7 +26,54 @@ function credentials(provider: OAuthProvider) {
 
 export function configured(provider: OAuthProvider) {
   const { id, secret } = credentials(provider);
+  if (provider === 'google') return false;
+  if (provider === 'apple') {
+    const { APPLE_TEAM_ID, APPLE_KEY_ID, APPLE_PRIVATE_KEY, API_PUBLIC_URL } = env();
+    return (
+      !!id &&
+      new URL(API_PUBLIC_URL).protocol === 'https:' &&
+      !!(secret || (APPLE_TEAM_ID && APPLE_KEY_ID && APPLE_PRIVATE_KEY))
+    );
+  }
   return !!id && (provider === 'kakao' || !!secret);
+}
+
+async function tokenSecret(provider: OAuthProvider) {
+  const { id, secret } = credentials(provider);
+  const { APPLE_TEAM_ID, APPLE_KEY_ID, APPLE_PRIVATE_KEY } = env();
+  if (provider !== 'apple' || !id || !APPLE_TEAM_ID || !APPLE_KEY_ID || !APPLE_PRIVATE_KEY) return secret;
+  const key = await importPKCS8(APPLE_PRIVATE_KEY.replaceAll('\\n', '\n'), 'ES256');
+  return new SignJWT({})
+    .setProtectedHeader({ alg: 'ES256', kid: APPLE_KEY_ID })
+    .setIssuer(APPLE_TEAM_ID)
+    .setSubject(id)
+    .setAudience('https://appleid.apple.com')
+    .setIssuedAt()
+    .setExpirationTime('5m')
+    .sign(key);
+}
+
+export function availableProviders(nativeIOS = false) {
+  return (['kakao', 'naver', 'apple', 'google'] as const).filter((p) =>
+    p === 'apple' && nativeIOS ? !!env().APPLE_IOS_BUNDLE_ID : configured(p),
+  );
+}
+
+export async function nativeAppleSubject(identityToken: string, nonce: string) {
+  const audience = env().APPLE_IOS_BUNDLE_ID;
+  if (!audience) throw new AppException('NOT_CONFIGURED');
+  try {
+    const { payload } = await jwtVerify(identityToken, appleKeys, {
+      issuer: 'https://appleid.apple.com',
+      audience,
+      algorithms: ['RS256'],
+      requiredClaims: ['sub', 'exp', 'nonce'],
+    });
+    if (payload.nonce === nonce) return z.string().min(1).max(255).parse(payload.sub);
+  } catch {
+    /* Do not expose tokens or provider errors. */
+  }
+  throw new AppException('VALIDATION', 'Apple 인증을 확인할 수 없습니다. 다시 시도해 주세요.');
 }
 
 const nonce = (verifier: string) =>
@@ -53,6 +100,8 @@ export function authorize(provider: OAuthProvider, state: string, verifier: stri
     url.searchParams.set('code_challenge_method', 'S256');
     url.searchParams.set('code_challenge', createHash('sha256').update(verifier).digest('base64url'));
   }
+  // Only the stable subject is needed. Apple's code-only flow supports a GET callback.
+  if (provider === 'apple') url.searchParams.set('response_mode', 'query');
   if (provider === 'apple' || provider === 'google') url.searchParams.set('nonce', nonce(verifier));
   return url.href;
 }
@@ -63,14 +112,15 @@ export async function providerSubject(
   state: string,
   verifier: string,
 ) {
-  const { id, secret } = credentials(provider);
-  if (!id) throw new AppException('NOT_CONFIGURED');
+  const { id } = credentials(provider);
+  if (!configured(provider) || !id) throw new AppException('NOT_CONFIGURED');
   const form = new URLSearchParams({
     grant_type: 'authorization_code',
     client_id: id,
     code,
     redirect_uri: redirect(provider),
   });
+  const secret = await tokenSecret(provider);
   if (secret) form.set('client_secret', secret);
   if (provider === 'google') form.set('code_verifier', verifier);
   if (provider === 'naver') form.set('state', state);

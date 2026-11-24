@@ -48,8 +48,15 @@ it('두 증명값과 요청을 시작한 계정이 일치할 때만 연결하고
   await t.prisma.socialIdentity.create({
     data: { userId: user.id, provider: 'google', subject: 'another-verified-subject' },
   });
+  // 비활성인 Google은 마지막 로그인 수단을 대체할 수 없다.
+  await agent.delete('/api/v1/me/social/kakao').expect(409);
+  await t.prisma.socialIdentity.create({
+    data: { userId: user.id, provider: 'naver', subject: 'naver-subject' },
+  });
   await agent.delete('/api/v1/me/social/kakao').expect(200);
-  expect((await agent.get('/api/v1/me/social')).body.data.linked).toEqual(['google']);
+  expect((await agent.get('/api/v1/me/social')).body.data.linked).toEqual(
+    expect.arrayContaining(['google', 'naver']),
+  );
 });
 
 it('연결 불가 상태, 만료된 콜백, 자기 기기와 다른 회원 세션 보호', async () => {
