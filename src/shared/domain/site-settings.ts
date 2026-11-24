@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { mobileBannersSetting } from './mobile-banners';
 
 const short = z.string().trim().min(1, '내용을 입력해 주세요.').max(120);
 const line = z.string().trim().min(1).max(600);
@@ -100,6 +101,7 @@ export const settingsSchema = z
     poster: image,
     film: z.string().regex(/^\/media\/(?:[\w-]+\/)*[\w-]+\.mp4$/),
     accent: z.string().regex(/^#[a-f0-9]{6}$/i),
+    mobileBanners: mobileBannersSetting,
     seoTitle: short,
     seoDescription: line,
   })
