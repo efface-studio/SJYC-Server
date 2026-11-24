@@ -8,6 +8,7 @@ import type { NextFunction, Request, Response } from 'express';
 import helmet from 'helmet';
 import { AppModule } from './app.module';
 import { env, webOrigins } from './config/env';
+import { captureRequest } from './operations/server-logs';
 import { csrf } from './common/csrf';
 import { httpLogger, logger } from './common/logger';
 import { clientIp, RateLimitService } from './common/rate-limit';
@@ -23,8 +24,14 @@ export async function createApp(testing?: TestingModule): Promise<INestApplicati
         logger: ['error', 'warn'],
       });
   app.set('trust proxy', 1);
+  // 세션 쿠키와 개인 응답이 브라우저·공유 프록시 캐시에 남지 않도록 오류 응답에도 적용한다.
+  app.use((_req: Request, res: Response, next: NextFunction) => {
+    res.setHeader('Cache-Control', 'private, no-store');
+    next();
+  });
   app.useBodyParser('json', { limit: '1mb' });
   app.use(httpLogger);
+  app.use(captureRequest);
   app.use(helmet({ crossOriginResourcePolicy: { policy: 'same-site' } }));
   app.use(cookieParser());
   app.enableCors({ origin: webOrigins(), credentials: true, exposedHeaders: ['x-request-id'] });

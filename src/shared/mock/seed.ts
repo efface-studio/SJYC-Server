@@ -1,3 +1,4 @@
+import type { SettingsRecord } from '../domain/site-settings';
 /**
  * 개발용 데이터.
  * - 프로그램·공지·신청·예약·문의·회원·동아리 가입/명단/소식은 샘플이다 (분류명만 공식 명칭).
@@ -45,6 +46,7 @@ export interface MockMembership {
 }
 
 export interface MockDb {
+  siteSettings?: SettingsRecord;
   version: 8;
   notifications: Notification[];
   media: MediaItem[];

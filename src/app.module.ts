@@ -1,3 +1,4 @@
+import { OperationsModule } from './operations/operations.controller';
 import { Module } from '@nestjs/common';
 import { APP_FILTER, APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
 import { AuthModule } from './auth/auth.controller';
@@ -35,6 +36,7 @@ import { RedisModule } from './redis/redis.service';
     ClubsModule,
     ContentModule,
     AuditModule,
+    OperationsModule,
     AdminModule,
     AttendanceModule,
     ManageModule,

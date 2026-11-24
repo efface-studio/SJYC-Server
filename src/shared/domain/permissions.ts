@@ -15,6 +15,7 @@ export const PERMISSIONS = [
   'space.manage',
   'inquiry.answer',
   'policy.manage',
+  'site.manage',
   'audit.read',
   /** 출석부 관리 (동아리·프로그램) */
   'attendance.manage',
@@ -35,6 +36,7 @@ export const PERMISSION_LABEL: Record<Permission, string> = {
   'space.manage': '공간 예약 관리',
   'inquiry.answer': '문의 답변·FAQ',
   'policy.manage': '정책 문서 관리',
+  'site.manage': '사이트 설정 관리',
   'audit.read': '감사 로그 조회',
   'attendance.manage': '출석부 관리',
   'developer.access': '개발자 도구',
