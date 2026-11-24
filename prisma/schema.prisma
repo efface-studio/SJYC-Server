@@ -50,6 +50,7 @@ model User {
   createdAt     DateTime        @default(now())
   updatedAt     DateTime        @updatedAt
 
+  socialIdentities SocialIdentity[]
   profilePhoto       UserProfilePhoto?
   sessions           Session[]
   authTokens         AuthToken[]
@@ -62,6 +63,16 @@ model User {
   inquiries          Inquiry[]
   managedClubs       ClubManager[]
   attendance         AttendanceRecord[]
+}
+
+model SocialIdentity {
+  userId   String
+  provider OAuthProvider
+  subject  String
+  user     User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([userId, provider])
+  @@unique([provider, subject])
 }
 
 model UserProfilePhoto {
