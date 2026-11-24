@@ -1,3 +1,4 @@
+import sharp from 'sharp';
 import { clearRateLimits, createTestApp, type TestContext } from './app';
 import { createUser, loginAgent, PASSWORD, signedIn } from './fixtures';
 
@@ -17,6 +18,25 @@ describe('내 정보', () => {
       .send({ name: '이름', phone: '', agreeMarketing: false });
     expect(res.status).toBe(401);
     expect(res.body.error.code).toBe('UNAUTHENTICATED');
+  });
+
+  it('본인의 프로필 사진을 저장하고 기본 이미지로 복원한다', async () => {
+    const { agent } = await signedIn(t);
+    const other = await signedIn(t);
+    const path = '/api/v1/me/profile/photo';
+    await t.http.get(path).expect(401);
+    const jpg = await sharp({ create: { width: 40, height: 20, channels: 3, background: 'red' } })
+      .jpeg()
+      .toBuffer();
+    const { body } = await agent
+      .put(path)
+      .send({ image: 'data:image/jpeg;base64,' + jpg.toString('base64') })
+      .expect(200);
+    expect((await agent.get(path)).body.data).toEqual(body.data);
+    expect((await other.agent.get(path)).body.data.image).toBeNull();
+    await agent.put(path).send({ image: 'data:image/jpeg;base64,YWJj' }).expect(400);
+    await agent.put(path).send({ image: null }).expect(200);
+    expect((await agent.get(path)).body.data.image).toBeNull();
   });
 
   it('이름·연락처·마케팅 동의를 바꾸면 동의 시각이 기록된다', async () => {

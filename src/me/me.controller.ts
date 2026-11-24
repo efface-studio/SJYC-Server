@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, HttpCode, Module, Patch, Post, Res } from '@nestjs/common';
+import { Body, Controller, Delete, Get, HttpCode, Module, Patch, Post, Put, Res } from '@nestjs/common';
 import type { User as UserRow } from '@prisma/client';
 import { Prisma } from '@prisma/client';
 import type { Response } from 'express';
@@ -13,6 +13,8 @@ import { type ProfileInput, profileSchema } from '../shared/domain/schemas';
 import type { ConsentRecord, Notification, User } from '../shared/domain/types';
 import { toUser } from '../users/user.mapper';
 
+import { normalizePhoto, photoInput } from './profile-photo';
+
 const readSchema = z.object({ ids: z.array(z.string().max(64)).max(200).optional() });
 
 /** 마이페이지 — 로그인한 본인만 (전역 가드) */
@@ -23,6 +25,30 @@ export class MeController {
     private readonly sessions: SessionService,
     private readonly notifications: NotificationsService,
   ) {}
+
+  @Get('profile/photo')
+  async photo(@CurrentUser() me: UserRow) {
+    const row = await this.prisma.userProfilePhoto.findUnique({ where: { userId: me.id } });
+    return { image: row?.image ?? null };
+  }
+
+  @Put('profile/photo')
+  async setPhoto(
+    @CurrentUser() me: UserRow,
+    @Body(new ZodPipe(photoInput)) body: z.infer<typeof photoInput>,
+  ) {
+    if (body.image === null) {
+      await this.prisma.userProfilePhoto.deleteMany({ where: { userId: me.id } });
+      return { image: null };
+    }
+    const image = await normalizePhoto(body.image);
+    await this.prisma.userProfilePhoto.upsert({
+      where: { userId: me.id },
+      create: { userId: me.id, image },
+      update: { image },
+    });
+    return { image };
+  }
 
   @Patch('profile')
   async updateProfile(
@@ -56,7 +82,10 @@ export class MeController {
   @Delete()
   @HttpCode(204)
   async withdraw(@CurrentUser() me: UserRow, @Res({ passthrough: true }) res: Response): Promise<void> {
-    await this.prisma.user.update({ where: { id: me.id }, data: { status: 'withdrawn' } });
+    await this.prisma.$transaction([
+      this.prisma.userProfilePhoto.deleteMany({ where: { userId: me.id } }),
+      this.prisma.user.update({ where: { id: me.id }, data: { status: 'withdrawn' } }),
+    ]);
     await this.sessions.revokeAll(me.id);
     this.sessions.clearCookie(res);
   }

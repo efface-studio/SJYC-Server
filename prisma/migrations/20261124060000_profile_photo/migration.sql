@@ -1,0 +1,4 @@
+CREATE TABLE "UserProfilePhoto" (
+  "userId" TEXT PRIMARY KEY REFERENCES "User"("id") ON UPDATE CASCADE ON DELETE CASCADE,
+  "image" TEXT NOT NULL
+);

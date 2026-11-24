@@ -50,6 +50,7 @@ model User {
   createdAt     DateTime        @default(now())
   updatedAt     DateTime        @updatedAt
 
+  profilePhoto     UserProfilePhoto?
   sessions         Session[]
   authTokens       AuthToken[]
   notifications    Notification[]
@@ -60,6 +61,12 @@ model User {
   inquiries        Inquiry[]
   managedClubs     ClubManager[]
   attendance       AttendanceRecord[]
+}
+
+model UserProfilePhoto {
+  userId String @id
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  image  String @db.Text
 }
 
 /// 로그인 세션 — 쿠키에는 원문 토큰, DB 에는 SHA-256 해시만 둔다
