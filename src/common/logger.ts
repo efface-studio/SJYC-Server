@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import type { Request } from 'express';
 import pino from 'pino';
 import { pinoHttp } from 'pino-http';
 
@@ -8,29 +9,13 @@ const REDACT = [
   'req.headers.authorization',
   'req.headers["x-xsrf-token"]',
   'res.headers["set-cookie"]',
+  'res.headers.location',
   '*.password',
   '*.passwordConfirm',
   '*.token',
   '*.code',
   '*.phone',
 ];
-
-/** URL 쿼리로 오는 인증 값 — 요청 로그에서 값만 가린다 */
-const SECRET_QUERY = /^(code|state|token|password)$/i;
-
-export function redactUrl(url: string): string {
-  const q = url.indexOf('?');
-  if (q < 0) return url;
-  const params = new URLSearchParams(url.slice(q + 1));
-  let hit = false;
-  for (const key of new Set(params.keys())) {
-    if (SECRET_QUERY.test(key)) {
-      params.set(key, '[redacted]');
-      hit = true;
-    }
-  }
-  return hit ? `${url.slice(0, q)}?${params.toString()}` : url;
-}
 
 export const logger = pino({
   level: process.env.LOG_LEVEL ?? (process.env.NODE_ENV === 'test' ? 'silent' : 'info'),
@@ -41,7 +26,12 @@ export const logger = pino({
       : undefined,
 });
 
-export const httpLogger = pinoHttp({
+export function routeTemplate(req: Request): string {
+  const template: unknown = req.route?.path;
+  return typeof template === 'string' ? template : '(경로 미지정)';
+}
+
+export const httpLogger = pinoHttp<Request>({
   logger,
   genReqId: (_req, res) => {
     const id = randomUUID();
@@ -49,11 +39,12 @@ export const httpLogger = pinoHttp({
     return id;
   },
   serializers: {
-    req: (req: { id: string; method: string; url: string }) => ({
+    req: (req: { id: string; method: string }) => ({
       id: req.id,
       method: req.method,
-      url: redactUrl(req.url),
     }),
   },
+  customSuccessObject: (req, _res, entry) => ({ ...entry, route: routeTemplate(req) }),
+  customErrorObject: (req, _res, _err, entry) => ({ ...entry, route: routeTemplate(req) }),
   autoLogging: { ignore: (req) => req.url === '/api/v1/health' },
 });

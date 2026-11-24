@@ -24,6 +24,11 @@ export async function createApp(testing?: TestingModule): Promise<INestApplicati
         logger: ['error', 'warn'],
       });
   app.set('trust proxy', 1);
+  // 세션 쿠키와 개인 응답이 브라우저·공유 프록시 캐시에 남지 않도록 오류 응답에도 적용한다.
+  app.use((_req: Request, res: Response, next: NextFunction) => {
+    res.setHeader('Cache-Control', 'private, no-store');
+    next();
+  });
   app.useBodyParser('json', { limit: '1mb' });
   app.use(httpLogger);
   app.use(captureRequest);

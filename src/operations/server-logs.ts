@@ -1,5 +1,6 @@
 import { performance } from 'node:perf_hooks';
 import type { Request, Response, NextFunction } from 'express';
+import { routeTemplate } from '../common/logger';
 import type { ServerLogSnapshot, ServerRequestLog } from '../shared/domain/site-settings';
 
 const capacity = 300;
@@ -9,8 +10,7 @@ const methods = new Set(['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIO
 export function captureRequest(req: Request, res: Response, next: NextFunction) {
   const start = performance.now();
   res.once('finish', () => {
-    const template: unknown = req.route?.path;
-    const route = typeof template === 'string' ? template : '(경로 미지정)';
+    const route = routeTemplate(req);
     if (route.endsWith('/admin/server-logs') || route.endsWith('/health')) return;
     const id = res.getHeader('x-request-id');
     if (typeof id !== 'string') return;
