@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { type AuthTokenPurpose, Prisma, type User } from '@prisma/client';
+import { type AuthTokenPurpose } from '@prisma/client';
 import argon2 from 'argon2';
 import { AppException } from '../common/app-exception';
 import { logger } from '../common/logger';
@@ -8,7 +8,7 @@ import { env } from '../config/env';
 import { MailService } from '../mail/mail.service';
 import { PrismaService } from '../prisma/prisma.service';
 import type { LoginInput, SignupInput } from '../shared/domain/schemas';
-import type { ConsentRecord } from '../shared/domain/types';
+import { PhoneSignup } from './phone-signup';
 import { SessionService } from './session.service';
 import { hashToken, randomToken } from './tokens';
 
@@ -27,73 +27,48 @@ export class AuthService {
     private readonly sessions: SessionService,
     private readonly mail: MailService,
     private readonly limiter: RateLimitService,
+    private readonly phoneSignup: PhoneSignup,
   ) {}
 
-  async signup(input: SignupInput, ip: string): Promise<{ requiresEmailVerification: true }> {
-    if (await this.limiter.exceeded(`signup:ip:${ip}`, 10, 3600)) throw new AppException('RATE_LIMITED');
+  async signup(input: SignupInput, ip: string) {
+    if (await this.limiter.exceeded('signup:ip:' + ip, 10, 3600)) throw new AppException('RATE_LIMITED');
     const email = input.email.toLowerCase();
+    if (await this.limiter.exceeded('signup:email:' + hashToken(email), 8, 900))
+      throw new AppException('RATE_LIMITED');
     const existing = await this.prisma.user.findUnique({ where: { email } });
-    if (existing) return this.retryPendingSignup(existing, input.password);
-
-    const now = new Date().toISOString();
-    const consents: ConsentRecord[] = [
-      { key: 'terms', required: true, agreed: true, agreedAt: now },
-      { key: 'privacy', required: true, agreed: true, agreedAt: now },
-      {
-        key: 'marketing',
-        required: false,
-        agreed: input.agreeMarketing,
-        agreedAt: input.agreeMarketing ? now : null,
-      },
-    ];
-    let user: User;
-    try {
-      user = await this.prisma.user.create({
-        data: {
-          email,
-          name: input.name,
-          birthYear: input.birthYear,
-          phone: input.phone || null,
-          passwordHash: await argon2.hash(input.password),
-          consents: consents as unknown as Prisma.InputJsonValue,
-        },
-      });
-    } catch (e) {
-      // 동시에 같은 이메일로 가입한 경우
-      if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002') {
-        const concurrent = await this.prisma.user.findUnique({ where: { email } });
-        return this.retryPendingSignup(concurrent, input.password);
-      }
-      throw e;
-    }
-    await this.sendVerification(user.id, email);
-    return { requiresEmailVerification: true };
-  }
-
-  private async retryPendingSignup(
-    user: User | null,
-    password: string,
-  ): Promise<{ requiresEmailVerification: true }> {
     if (
-      !user ||
-      user.status !== 'active' ||
-      user.emailVerified ||
-      !user.passwordHash ||
-      !(await argon2.verify(user.passwordHash, password))
-    ) {
+      existing &&
+      (existing.status !== 'active' ||
+        existing.emailVerified ||
+        existing.signupPhoneVerifiedAt ||
+        !existing.passwordHash ||
+        !(await argon2.verify(existing.passwordHash, input.password)))
+    )
       throw new AppException('CONFLICT', '이미 가입된 이메일입니다.', {
         reason: 'EMAIL_TAKEN',
         fieldErrors: { email: '이미 가입된 이메일입니다.' },
       });
-    }
-    await this.checkVerificationLimit(user.email);
-    await this.sendVerification(user.id, user.email);
-    return { requiresEmailVerification: true };
+    return this.phoneSignup.start(
+      'password:' + randomToken(),
+      {
+        kind: 'password',
+        userId: existing?.id ?? null,
+        passwordHash: existing?.passwordHash ?? (await argon2.hash(input.password)),
+        email,
+        name: input.name,
+        birthDate: input.birthDate ?? null,
+        birthYear: input.birthYear,
+        marketing: input.agreeMarketing,
+      },
+      input.phone,
+      ip,
+    );
   }
-
   /** 가입 여부와 관계없이 같은 응답 — 미인증 계정에만 실제로 보낸다 */
   async resendVerification(rawEmail: string): Promise<void> {
     const email = rawEmail.toLowerCase();
+    if (env().SIGNUP_PREVIEW_CODE === 'on' && !env().SMTP_URL)
+      throw new AppException('NOT_CONFIGURED', '이메일 발송이 설정되지 않았습니다.');
     await this.checkVerificationLimit(email);
     const user = await this.prisma.user.findUnique({ where: { email } });
     if (user && !user.emailVerified && user.status === 'active') await this.sendVerification(user.id, email);
@@ -101,13 +76,14 @@ export class AuthService {
 
   /** 메일 링크 확인 — 성공 여부만 돌려준다 */
   async confirmEmail(token: string): Promise<boolean> {
+    if (!/^[a-zA-Z0-9_-]{43}$/.test(token)) return false;
     const t = await this.consumeToken(token, 'verify_email');
     if (!t) return false;
     await this.prisma.user.update({ where: { id: t.userId }, data: { emailVerified: true } });
     return true;
   }
 
-  async login(input: LoginInput, ip: string, userAgent?: string) {
+  async verifyLogin(input: LoginInput, ip: string) {
     const email = input.email.toLowerCase();
     const key = `login:${ip}:${email}`;
     if (await this.limiter.exceeded(key, 10, 900)) {
@@ -121,10 +97,15 @@ export class AuthService {
     if (user.status === 'suspended') {
       throw new AppException('FORBIDDEN', '이용이 제한된 계정입니다. 센터에 문의해 주세요.');
     }
-    if (!user.emailVerified) {
+    if (!user.emailVerified && !user.signupPhoneVerifiedAt) {
       throw new AppException('FORBIDDEN', '이메일 인증을 완료한 뒤 로그인할 수 있습니다.');
     }
     await this.limiter.reset(key);
+    return user;
+  }
+
+  async login(input: LoginInput, ip: string, userAgent?: string) {
+    const user = await this.verifyLogin(input, ip);
     const session = await this.sessions.create(user.id, userAgent);
     const managed = await this.prisma.clubManager.findMany({
       where: { userId: user.id },
@@ -138,7 +119,7 @@ export class AuthService {
     const email = rawEmail.toLowerCase();
     if (await this.limiter.exceeded(`reset:${email}`, 3, 600)) throw new AppException('RATE_LIMITED');
     const user = await this.prisma.user.findUnique({ where: { email } });
-    if (!user || user.status !== 'active') return;
+    if (!user || !user.emailVerified || user.status !== 'active') return;
     const token = await this.issueToken(user.id, 'reset_password', RESET_TTL_MS);
     await this.mail.send({
       to: email,
@@ -201,10 +182,7 @@ export class AuthService {
     } catch {
       logger.error('가입 인증 메일 전송 실패');
       await this.prisma.authToken.deleteMany({ where: { id: issued.id } });
-      throw new AppException(
-        'NETWORK',
-        '계정은 등록되었지만 인증 메일을 보내지 못했습니다. 잠시 뒤 같은 이메일과 비밀번호로 다시 시도해 주세요.',
-      );
+      throw new AppException('NETWORK', '인증 메일을 보내지 못했습니다. 잠시 후 다시 요청해 주세요.');
     }
     await this.prisma.authToken.deleteMany({ where: { id: { in: pending.map((t) => t.id) }, usedAt: null } });
   }

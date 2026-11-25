@@ -39,10 +39,12 @@ model User {
   name          String
   phone         String?
   birthYear     Int?
+  birthDate     DateTime?       @db.Date
   /// argon2id. 소셜 로그인 전용 계정은 비어 있다
   passwordHash  String?
   roles         Role[]          @default([member])
   status        UserStatus      @default(active)
+  signupPhoneVerifiedAt DateTime?
   emailVerified Boolean         @default(false)
   providers     OAuthProvider[] @default([])
   /// ConsentRecord[] — 약관·개인정보·마케팅 동의 이력
@@ -531,4 +533,18 @@ model SiteSettings {
   id      String @id
   version Int
   values  Json
+}
+
+/// 가입 완료 전까지 보관하는 일회용 휴대전화 인증 요청
+model SignupPhoneChallenge {
+  scope String @id
+  ticketHash String @unique
+  data Json
+  phone String
+  codeHash String
+  attempts Int @default(0)
+  sentAt DateTime
+  codeExpiresAt DateTime
+  expiresAt DateTime
+  @@index([expiresAt])
 }

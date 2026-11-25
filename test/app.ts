@@ -1,3 +1,4 @@
+import { SignupSms } from '../src/auth/signup-sms';
 import type { INestApplication } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import supertest from 'supertest';
@@ -21,7 +22,15 @@ export class FakeMail {
   }
 }
 
+export class FakeSms {
+  sent: { phone: string; code: string }[] = [];
+  send(phone: string, code: string) {
+    this.sent.push({ phone, code });
+    return Promise.resolve();
+  }
+}
 export interface TestContext {
+  sms: FakeSms;
   app: INestApplication;
   http: ReturnType<typeof supertest>;
   prisma: PrismaService;
@@ -32,7 +41,10 @@ export interface TestContext {
 /** 실제 DB·Redis 로 앱을 띄운다. 외부 연동(메일)은 테스트 더블로 교체한다 */
 export async function createTestApp(): Promise<TestContext> {
   const mail = new FakeMail();
+  const sms = new FakeSms();
   const moduleRef = await Test.createTestingModule({ imports: [AppModule] })
+    .overrideProvider(SignupSms)
+    .useValue(sms)
     .overrideProvider(MailService)
     .useValue(mail)
     .compile();
@@ -45,7 +57,7 @@ export async function createTestApp(): Promise<TestContext> {
     throw new Error(`테스트 Redis 는 db 0 이 아니어야 합니다 (REDIS_URL_TEST): ${process.env.REDIS_URL}`);
   }
   await redis.flushdb();
-  return { app, http: supertest(app.getHttpServer()), prisma: app.get(PrismaService), redis, mail };
+  return { app, http: supertest(app.getHttpServer()), prisma: app.get(PrismaService), redis, mail, sms };
 }
 
 /** rate limit 이 테스트 사이에 누적되지 않게 비운다 (한도 자체는 별도 테스트에서 확인) */
