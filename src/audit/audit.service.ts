@@ -28,8 +28,17 @@ export const toAuditEvent = (e: {
 export class AuditService {
   constructor(private readonly prisma: PrismaService) {}
 
-  async record(actor: Pick<UserRow, 'id' | 'name'>, e: AuditInput, tx?: Tx): Promise<void> {
-    await (tx ?? this.prisma).auditEvent.create({ data: { actorId: actor.id, actorName: actor.name, ...e } });
+  async record(
+    actor: Pick<UserRow, 'id' | 'name'>,
+    e: AuditInput,
+    tx?: Tx,
+    change?: { before: string; after: string },
+  ): Promise<void> {
+    const event = await (tx ?? this.prisma).auditEvent.create({
+      data: { actorId: actor.id, actorName: actor.name, ...e },
+    });
+    if (tx && change)
+      await tx.siteSettings.create({ data: { id: 'dev:change:' + event.id, version: 1, values: change } });
   }
 }
 

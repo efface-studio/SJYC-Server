@@ -1,3 +1,4 @@
+import { DeveloperConsole } from './developer-console';
 import { Body, Controller, Get, Module, Put } from '@nestjs/common';
 import type { User } from '@prisma/client';
 import { AuditService } from '../audit/audit.service';
@@ -56,5 +57,5 @@ export class OperationsController {
     return recentServerLogs();
   }
 }
-@Module({ controllers: [OperationsController] })
+@Module({ controllers: [OperationsController, DeveloperConsole] })
 export class OperationsModule {}

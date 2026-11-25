@@ -1,3 +1,4 @@
+import { OpenActivity } from '../common/auth';
 import { Body, Controller, Get, Module, Param, Post, Query } from '@nestjs/common';
 import type { User as UserRow } from '@prisma/client';
 import { z } from 'zod';
@@ -32,6 +33,7 @@ export class SpacesController {
     return this.spaces.availability(id, q.date);
   }
 
+  @OpenActivity('spaces')
   @Post('spaces/:id/reservations')
   reserve(
     @CurrentUser() me: UserRow,

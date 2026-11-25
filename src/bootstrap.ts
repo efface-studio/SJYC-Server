@@ -1,3 +1,5 @@
+import { countError } from './operations/error-metrics';
+import { RedisService } from './redis/redis.service';
 import 'reflect-metadata';
 import type { INestApplication } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
@@ -31,7 +33,14 @@ export async function createApp(testing?: TestingModule): Promise<INestApplicati
   });
   app.useBodyParser('json', { limit: '1mb' });
   app.use(httpLogger);
-  app.use(captureRequest);
+  const metricsRedis = app.get(RedisService);
+  app.use(
+    captureRequest((entry) => {
+      void countError(metricsRedis, entry).catch(() => {
+        /* 통계 장애가 서비스 요청에 영향을 주지 않는다. */
+      });
+    }),
+  );
   app.use(helmet({ crossOriginResourcePolicy: { policy: 'same-site' } }));
   app.use(cookieParser());
   app.enableCors({ origin: webOrigins(), credentials: true, exposedHeaders: ['x-request-id'] });

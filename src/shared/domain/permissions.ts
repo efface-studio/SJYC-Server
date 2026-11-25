@@ -61,10 +61,11 @@ const ROLE_PERMISSIONS: Record<Role, readonly Permission[]> = {
 };
 
 export function can(
-  user: Pick<User, 'roles' | 'status'> | null | undefined,
+  user: (Pick<User, 'roles' | 'status'> & Pick<User, 'permissionScope'>) | null | undefined,
   permission: Permission,
 ): boolean {
   if (!user || user.status !== 'active') return false;
+  if (user.permissionScope && !user.permissionScope.includes(permission)) return false;
   return user.roles.some((role) => ROLE_PERMISSIONS[role].includes(permission));
 }
 

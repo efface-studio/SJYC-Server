@@ -1,3 +1,4 @@
+import { staffScope } from '../operations/developer-controls';
 import { Injectable } from '@nestjs/common';
 import { type AuthTokenPurpose } from '@prisma/client';
 import argon2 from 'argon2';
@@ -110,7 +111,14 @@ export class AuthService {
       where: { userId: user.id },
       select: { clubId: true },
     });
-    return { user: { ...user, managedClubIds: managed.map((m) => m.clubId) }, ...session };
+    return {
+      user: {
+        ...user,
+        permissionScope: await staffScope(this.prisma, user.id, user.roles),
+        managedClubIds: managed.map((m) => m.clubId),
+      },
+      ...session,
+    };
   }
 
   /** 가입 여부를 드러내지 않도록 항상 같은 응답 */

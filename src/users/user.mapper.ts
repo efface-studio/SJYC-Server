@@ -3,7 +3,7 @@ import type { ConsentRecord, User } from '../shared/domain/types';
 
 /** DB 행 → 응답용 회원 (비밀번호 해시 등은 내보내지 않는다) */
 export function toUser(
-  u: UserRow & { managedClubIds?: string[] },
+  u: UserRow & { managedClubIds?: string[]; permissionScope?: string[] },
   managedClubIds: string[] = u.managedClubIds ?? [],
 ): User {
   return {
@@ -19,5 +19,6 @@ export function toUser(
     consents: u.consents as unknown as ConsentRecord[],
     createdAt: u.createdAt.toISOString(),
     managedClubIds,
+    permissionScope: u.permissionScope,
   };
 }
