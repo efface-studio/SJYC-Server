@@ -75,7 +75,37 @@ export class DeveloperConsole {
     private audit: AuditService,
   ) {}
   @Get('view')
-  async view(@Query(new ZodPipe(input)) q: z.infer<typeof input>): Promise<DevView> {
+  @RequirePermission('developer.view')
+  async view(
+    @CurrentUser() actor: User,
+    @Query(new ZodPipe(input)) q: z.infer<typeof input>,
+  ): Promise<DevView> {
+    const writable = can(actor, 'developer.access');
+    if (!writable && q.section === 'permissions' && q.item === 'new') throw new AppException('FORBIDDEN');
+    const view = await this.section(q);
+    if (writable) return view;
+
+    // 조회 전용 응답에도 현재 설정값을 제공한다.
+    const { forms, groups, ...rest } = view;
+    const visibleGroups = groups.map((group) => ({
+      ...group,
+      rows: group.rows.filter((row) => !(row.next?.section === 'permissions' && row.next.item === 'new')),
+    }));
+    for (const form of forms ?? []) {
+      if (!form.fields?.length) continue;
+      visibleGroups.push({
+        title: '현재 설정',
+        rows: form.fields.map((field) => {
+          const values = field.multiple ? field.value.split(',') : [field.value];
+          const detail = values.map((v) => field.options?.find((o) => o.value === v)?.label ?? v).join(', ');
+          return { title: field.label, detail: detail || '없음' };
+        }),
+      });
+    }
+    return { ...rest, groups: visibleGroups };
+  }
+
+  private async section(q: z.infer<typeof input>): Promise<DevView> {
     switch (q.section) {
       case 'permissions':
         return this.permissions(q);
