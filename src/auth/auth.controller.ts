@@ -1,3 +1,6 @@
+import { PhoneSignup, phoneCookie, savePhoneTicket, clearPhoneTicket } from './phone-signup';
+import { SignupSms } from './signup-sms';
+import { profileSchema } from '../shared/domain/schemas';
 import { AdminSocial } from './admin-social';
 import { SocialOnboarding } from './social-onboarding';
 import { SocialController } from './social.controller';
@@ -29,6 +32,7 @@ const resetConfirmSchema = z.object({ token: z.string().min(1).max(200), passwor
 export class AuthController {
   constructor(
     private readonly auth: AuthService,
+    private readonly phone: PhoneSignup,
     private readonly sessions: SessionService,
   ) {}
 
@@ -68,32 +72,48 @@ export class AuthController {
     @Req() req: Request,
     @Res({ passthrough: true }) res: Response,
   ) {
-    const result = await this.auth.signup(input, clientIp(req));
-    if (!result.previewTicket) return { requiresEmailVerification: true };
-    res.cookie('sjyc_signup_preview', result.previewTicket, this.previewCookie());
-    return { requiresEmailVerification: true, verificationMode: 'preview' };
-  }
-
-  private previewCookie() {
-    return {
-      httpOnly: true,
-      sameSite: 'lax' as const,
-      secure: env().API_PUBLIC_URL.startsWith('https://'),
-      path: new URL(env().API_PUBLIC_URL).pathname.replace(/\/$/, '') + '/auth/email-verification/preview',
-      maxAge: 900000,
-    };
+    const { ticket, state } = await this.auth.signup(input, clientIp(req));
+    savePhoneTicket(res, ticket);
+    return { requiresPhoneVerification: true, ...state };
   }
 
   @Public()
-  @Post('email-verification/preview')
-  @HttpCode(204)
-  async confirmPreview(
+  @Get('phone-verification')
+  async phoneState(@Req() req: Request, @Res({ passthrough: true }) res: Response) {
+    res.set('Cache-Control', 'no-store');
+    return this.phone.view(String(req.cookies?.[phoneCookie] ?? ''));
+  }
+  @Public()
+  @Post('phone-verification/resend')
+  @HttpCode(200)
+  async resendPhone(
+    @Body(new ZodPipe(z.object({ phone: profileSchema.shape.phone.optional() }))) body: { phone?: string },
+    @Req() req: Request,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    const { ticket, state } = await this.phone.resend(
+      String(req.cookies?.[phoneCookie] ?? ''),
+      body.phone,
+      clientIp(req),
+    );
+    savePhoneTicket(res, ticket);
+    return state;
+  }
+  @Public()
+  @Post('phone-verification/confirm')
+  @HttpCode(200)
+  async confirmPhone(
     @Body(new ZodPipe(z.object({ code: z.string().regex(/^\d{6}$/) }))) body: { code: string },
     @Req() req: Request,
     @Res({ passthrough: true }) res: Response,
   ) {
-    await this.auth.confirmPreview(String(req.cookies?.sjyc_signup_preview ?? ''), body.code);
-    res.clearCookie('sjyc_signup_preview', { path: this.previewCookie().path });
+    const result = await this.phone.confirm(String(req.cookies?.[phoneCookie] ?? ''), body.code);
+    clearPhoneTicket(res);
+    if (result.social) {
+      const session = await this.sessions.create(result.userId, req.get('user-agent'));
+      this.sessions.setCookie(res, session.token, session.expiresAt);
+    }
+    return { signedIn: result.social };
   }
 
   @Public()
@@ -132,7 +152,15 @@ export class AuthController {
 
 @Module({
   controllers: [AuthController, SocialController],
-  providers: [AuthService, SessionService, SocialService, SocialOnboarding, AdminSocial],
+  providers: [
+    AuthService,
+    SessionService,
+    SocialService,
+    SocialOnboarding,
+    AdminSocial,
+    PhoneSignup,
+    SignupSms,
+  ],
   exports: [SessionService],
 })
 export class AuthModule {}
