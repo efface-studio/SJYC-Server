@@ -4,8 +4,10 @@ import { env } from './config/env';
 
 async function main() {
   const app = await createApp();
-  if (env().SIGNUP_PREVIEW_CODE === 'on') await app.listen(env().PORT, '127.0.0.1');
-  else await app.listen(env().PORT);
+  const { PORT, LISTEN_HOST, SIGNUP_PREVIEW_CODE } = env();
+  const host = SIGNUP_PREVIEW_CODE === 'on' ? '127.0.0.1' : LISTEN_HOST;
+  if (host) await app.listen(PORT, host);
+  else await app.listen(PORT);
   logger.info(`API listening on :${env().PORT}`);
 }
 

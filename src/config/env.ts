@@ -4,6 +4,7 @@ const schema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
   SIGNUP_PREVIEW_CODE: z.enum(['off', 'on']).default('off'),
   PORT: z.coerce.number().int().positive().default(4000),
+  LISTEN_HOST: z.string().min(1).optional(),
   DATABASE_URL: z.string().min(1),
   REDIS_URL: z.string().min(1),
   WEB_ORIGIN: z.string().default('http://localhost:3000'),
@@ -27,12 +28,12 @@ const schema = z.object({
     .string()
     .optional()
     .transform((v) => v || undefined),
-  /** 비우면 메일을 보내지 않고 로그로 남긴다 (운영은 필수) */
   SOLAPI_API_KEY: z.string().optional(),
   SOLAPI_API_SECRET: z.string().optional(),
   SOLAPI_SENDER: z.string().optional(),
   OTA_ROLLBACK_KEY_FILE: z.string().startsWith('/').optional(),
   OTA_DIRECTORY: z.string().startsWith('/').optional(),
+  MAIL_DELIVERY: z.enum(['smtp', 'disabled']).default('smtp'),
   SMTP_URL: z.string().optional(),
   MAIL_FROM: z.string().default('중구청소년센터 <no-reply@localhost>'),
   SESSION_TTL_HOURS: z.coerce
@@ -55,7 +56,11 @@ export function env(): Env {
     const detail = parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join(', ');
     throw new Error(`환경 변수가 올바르지 않습니다 — ${detail}`);
   }
-  if (parsed.data.NODE_ENV === 'production' && !parsed.data.SMTP_URL) {
+  if (
+    parsed.data.NODE_ENV === 'production' &&
+    parsed.data.MAIL_DELIVERY === 'smtp' &&
+    !parsed.data.SMTP_URL
+  ) {
     throw new Error('환경 변수가 올바르지 않습니다 — 운영에서는 SMTP_URL 이 필요합니다 (인증·재설정 메일)');
   }
   if (parsed.data.NODE_ENV === 'production' && parsed.data.SIGNUP_PREVIEW_CODE === 'on')
