@@ -353,3 +353,85 @@ it('메일 발송 중지 시 회원 유무와 상관없이 메일 요청만 503�
     resetEnvCache();
   }
 });
+
+it('임시 코드는 새 일반회원의 가입만 완료하고 번호 인증과 관리자 권한을 부여하지 않는다', async () => {
+  vi.stubEnv('SIGNUP_TEMPORARY_REGISTRATION', 'on');
+  resetEnvCache();
+  try {
+    const client = supertest.agent(t.app.getHttpServer()),
+      form = signupBody(uniqueEmail('temporary'));
+    const signup = '/api/v1/auth/signup',
+      verify = '/api/v1/auth/phone-verification';
+    const sent = t.sms.sent.length;
+    const started = await client.post(signup).send(form).expect(201);
+    expect(started.body.data.verificationMode).toBe('preview');
+    await client
+      .post(verify + '/resend')
+      .send({ phone: '010-1234-5678' })
+      .expect(200);
+    expect(t.sms.sent.length).toBe(sent);
+    await t.http
+      .post(verify + '/confirm')
+      .send({ code: '284600' })
+      .expect(400);
+    await client
+      .post(verify + '/confirm')
+      .send({ code: '000123' })
+      .expect(400);
+    await client
+      .post(verify + '/confirm')
+      .send({ code: '284600' })
+      .expect(200);
+    await client
+      .post(verify + '/confirm')
+      .send({ code: '284600' })
+      .expect(400);
+    const user = await t.prisma.user.findUniqueOrThrow({ where: { email: form.email } });
+    expect(user).toMatchObject({
+      signupPhoneVerifiedAt: null,
+      phone: '010-1234-5678',
+      emailVerified: false,
+      roles: ['member'],
+    });
+    expect(user.temporarySignupAt).toBeInstanceOf(Date);
+    await client.post(signup).send(form).expect(409);
+    await client.post('/api/v1/auth/login').send({ email: form.email, password: form.password }).expect(200);
+    await client.get('/api/v1/auth/session').expect(200);
+    await t.prisma.user.update({ where: { id: user.id }, data: { roles: ['admin'] } });
+    await client.get('/api/v1/auth/session').expect(401);
+    await client.post('/api/v1/auth/login').send({ email: form.email, password: form.password }).expect(403);
+  } finally {
+    vi.unstubAllEnvs();
+    resetEnvCache();
+  }
+});
+
+it('임시 가입을 끄면 이전 임시 요청은 만료되고 새 요청과 기존 계정에는 실제 문자 절차가 적용된다', async () => {
+  vi.stubEnv('SIGNUP_TEMPORARY_REGISTRATION', 'on');
+  resetEnvCache();
+  try {
+    const agent = supertest.agent(t.app.getHttpServer()),
+      signup = '/api/v1/auth/signup',
+      verify = '/api/v1/auth/phone-verification/confirm';
+    const old = await createUser(t, { email: uniqueEmail('previous') });
+    await t.prisma.user.update({ where: { id: old.id }, data: { emailVerified: false } });
+    const regular = await agent.post(signup).send(signupBody(old.email)).expect(201);
+    expect(regular.body.data.verificationMode).toBe('sms');
+    const fresh = supertest.agent(t.app.getHttpServer());
+    await fresh
+      .post(signup)
+      .send(signupBody(uniqueEmail('switch')))
+      .expect(201);
+    vi.stubEnv('SIGNUP_TEMPORARY_REGISTRATION', 'off');
+    resetEnvCache();
+    await fresh.post(verify).send({ code: '284600' }).expect(400);
+    const sms = await fresh
+      .post(signup)
+      .send(signupBody(uniqueEmail('real')))
+      .expect(201);
+    expect(sms.body.data.verificationMode).toBe('sms');
+  } finally {
+    vi.unstubAllEnvs();
+    resetEnvCache();
+  }
+});

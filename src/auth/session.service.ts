@@ -11,6 +11,10 @@ export const SESSION_COOKIE = 'sjyc_session';
 /** 세션의 회원 + 담당 동아리 ID (권한 판단에 쓴다) */
 export type AuthUser = UserRow & { managedClubIds: string[]; permissionScope?: string[] };
 
+export function isTemporaryMember(user: Pick<UserRow, 'temporarySignupAt' | 'roles'>) {
+  return !!user.temporarySignupAt && user.roles.length === 1 && user.roles[0] === 'member';
+}
+
 export interface ResolvedSession {
   user: AuthUser;
   expiresAt: Date;
@@ -41,6 +45,13 @@ export class SessionService {
       include: { user: { include: { managedClubs: { select: { clubId: true } } } } },
     });
     if (!s || s.expiresAt.getTime() <= Date.now() || s.user.status !== 'active') return null;
+    if (
+      s.user.temporarySignupAt &&
+      !s.user.emailVerified &&
+      !s.user.signupPhoneVerifiedAt &&
+      (!isTemporaryMember(s.user) || s.user.managedClubs.length > 0)
+    )
+      return null;
     const { managedClubs, ...row } = s.user;
     const user: AuthUser = {
       ...row,
