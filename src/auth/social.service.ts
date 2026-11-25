@@ -48,8 +48,10 @@ export class SocialService {
     };
   }
 
-  async start(provider: OAuthProvider, userId: string | null, web = false, admin = false) {
-    const state = (admin ? (web ? 'adminweb.' : 'adminapp.') : web ? 'web.' : '') + randomToken(),
+  async start(provider: OAuthProvider, userId: string | null, web = false, admin = false, adminLink = false) {
+    const state =
+        (admin ? (web ? 'adminweb.' : 'adminapp.') : web ? 'web.' : adminLink ? 'adminlink.' : '') +
+        randomToken(),
       claim = randomToken(),
       verifier = randomToken();
     const url = providers.authorize(provider, state, verifier);
