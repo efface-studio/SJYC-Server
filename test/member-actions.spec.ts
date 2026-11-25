@@ -1,5 +1,5 @@
 import { clearRateLimits, createTestApp, type TestContext } from './app';
-import { createProgram, signedIn, createUser } from './fixtures';
+import { createProgram, signedIn, createUser, loginAgent } from './fixtures';
 
 let t: TestContext;
 beforeAll(async () => {
@@ -69,4 +69,40 @@ it('동아리 가입과 프로그램 정원을 중복 처리하지 않고 탈퇴
     .send({ status: 'active' })
     .expect(409);
   expect(await t.prisma.programApplication.count({ where: { userId: id, programId: p.id } })).toBe(1);
+});
+
+it('관리자가 본인 활동을 등록·해제하고 모든 세션을 종료해도 역할·상태는 보호한다', async () => {
+  const { user, agent } = await signedIn(t, ['admin']);
+  const otherDevice = await loginAgent(t, user.email);
+  const c = await t.prisma.club.create({
+    data: { name: '본인 활동 검증', field: '음악', summary: '-', description: '-', meetingInfo: '-' },
+  });
+  const p = await createProgram(t);
+  const path = '/api/v1/admin/members/' + user.id;
+  const command = (data: object) => agent.post(actions(user.id)).send(data);
+  const options = await agent.get(path + '/activity-options').expect(200);
+  expect(options.body.data.clubs).toContainEqual({ id: c.id, title: c.name });
+  await command({ action: 'withdraw' }).expect(403);
+  await command({ action: 'reset-password' }).expect(403);
+  await agent
+    .patch(path)
+    .send({ roles: ['developer'] })
+    .expect(409);
+  await agent.patch(path).send({ status: 'suspended' }).expect(409);
+  await command({ action: 'join-club', clubId: c.id }).expect(201);
+  await command({ action: 'enroll', programId: p.id }).expect(201);
+  const application = await t.prisma.programApplication.findFirstOrThrow({
+    where: { userId: user.id, programId: p.id },
+  });
+  await agent.post('/api/v1/me/applications/' + application.id + '/cancel').expect(201);
+  await agent.delete('/api/v1/manage/clubs/' + c.id + '/members/' + user.id).expect(204);
+  expect(await t.prisma.program.findUniqueOrThrow({ where: { id: p.id } })).toMatchObject({
+    appliedCount: 0,
+  });
+  await command({ action: 'sign-out' }).expect(201);
+  for (const device of [agent, otherDevice]) await device.get('/api/v1/me/notifications').expect(401);
+  expect(await t.prisma.user.findUniqueOrThrow({ where: { id: user.id } })).toMatchObject({
+    roles: ['admin'],
+    status: 'active',
+  });
 });

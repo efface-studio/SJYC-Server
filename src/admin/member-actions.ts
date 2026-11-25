@@ -40,7 +40,7 @@ export class MemberActions {
 
   private check(actor: User, target: User | null) {
     if (!target) throw new AppException('NOT_FOUND');
-    if (actor.id === target.id || !canManageUser(actor, target))
+    if (!canManageUser(actor, target))
       throw new AppException('FORBIDDEN', '이 계정에 대한 변경 권한이 없습니다.');
     if (target.status === 'withdrawn') throw new AppException('CONFLICT', '이미 탈퇴한 회원입니다.');
     return target;
@@ -79,6 +79,9 @@ export class MemberActions {
     return this.db.$transaction(async (tx) => {
       await tx.$queryRaw`SELECT id FROM "User" WHERE id = ${id} FOR UPDATE`;
       const target = this.check(actor, await tx.user.findUnique({ where: { id } }));
+      if (actor.id === id && !['join-club', 'enroll', 'sign-out'].includes(input.action)) {
+        throw new AppException('FORBIDDEN', '이 작업은 본인 계정에 수행할 수 없습니다.');
+      }
       let resetUrl: string | undefined;
       let detail = '';
       switch (input.action) {
