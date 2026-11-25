@@ -19,7 +19,9 @@ export const PERMISSIONS = [
   'audit.read',
   /** 출석부 관리 (동아리·프로그램) */
   'attendance.manage',
-  /** 개발자 도구(환경·요청 로그·캐시·mock 데이터) — 개발자만 */
+  /** 운영 콘솔 조회 — 최고 관리자와 개발자 */
+  'developer.view',
+  /** 개발자 콘솔 변경과 기기 진단 — 개발자만 */
   'developer.access',
 ] as const;
 
@@ -39,7 +41,8 @@ export const PERMISSION_LABEL: Record<Permission, string> = {
   'site.manage': '사이트 설정 관리',
   'audit.read': '감사 로그 조회',
   'attendance.manage': '출석부 관리',
-  'developer.access': '개발자 도구',
+  'developer.view': '개발자 현황 조회',
+  'developer.access': '개발자 도구 관리',
 };
 
 const ROLE_PERMISSIONS: Record<Role, readonly Permission[]> = {

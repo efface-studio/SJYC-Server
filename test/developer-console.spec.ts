@@ -10,24 +10,43 @@ afterAll(() => t.app.close());
 beforeEach(() => clearRateLimits(t));
 const base = '/api/v1/admin/developer';
 
-it('다섯 개발자 화면과 변경 API가 일반 관리자 및 비로그인 접근을 차단한다', async () => {
+it('최고 관리자는 다섯 화면을 조회하고, 변경은 개발자만 가능하며 직원은 조회할 수 없다', async () => {
   const admin = await signedIn(t, ['admin']),
+    staff = await signedIn(t, ['staff']),
     dev = await signedIn(t, ['developer']);
   for (const section of ['permissions', 'logs', 'security', 'operations', 'system']) {
     await t.http
       .get(base + '/view')
       .query({ section })
       .expect(401);
-    await admin.agent
+    await staff.agent
       .get(base + '/view')
       .query({ section })
       .expect(403);
+    const snapshot = await admin.agent
+      .get(base + '/view')
+      .query({ section })
+      .expect(200);
+    expect(snapshot.body.data.groups.length).toBeGreaterThan(0);
+    expect(snapshot.body.data.forms).toBeUndefined();
     const { body } = await dev.agent
       .get(base + '/view')
       .query({ section })
       .expect(200);
     expect(body.data.groups.length).toBeGreaterThan(0);
   }
+  const config = await admin.agent
+    .get(base + '/view')
+    .query({ section: 'operations', item: 'settings' })
+    .expect(200);
+  expect(config.body.data.groups.flatMap((g: { rows: unknown[] }) => g.rows)).toContainEqual({
+    title: '유지보수 모드',
+    detail: '해제',
+  });
+  await admin.agent
+    .get(base + '/view')
+    .query({ section: 'permissions', item: 'new' })
+    .expect(403);
   await admin.agent
     .post(base + '/actions')
     .send({ command: 'refresh-stats' })
