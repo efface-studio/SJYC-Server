@@ -1,3 +1,4 @@
+import { resetEnvCache } from '../src/config/env';
 import supertest from 'supertest';
 import { clearRateLimits, createTestApp, type TestContext } from './app';
 import { createUser, loginAgent, PASSWORD, uniqueEmail } from './fixtures';
@@ -16,6 +17,7 @@ const signupBody = (email: string) => ({
   email,
   password: 'abcd1234',
   passwordConfirm: 'abcd1234',
+  phone: '010-0000-0000',
   birthYear: 2008,
   agreeTerms: 'on',
   agreePrivacy: 'on',
@@ -71,7 +73,7 @@ describe('회원가입·이메일 인증', () => {
     expect(t.mail.lastToken(email)).toBeUndefined();
     await t.http
       .post('/api/v1/auth/signup')
-      .send({ ...request, name: '재시도', phone: '' })
+      .send({ ...request, name: '재시도', phone: '010-0000-1212' })
       .expect(201);
     expect(
       await t.prisma.user.findMany({
@@ -86,7 +88,7 @@ describe('회원가입·이메일 인증', () => {
     expect(verified.headers.location).toContain('verified=1');
   });
 
-  it('휴대전화는 비워둘 수 있고 잘못된 번호는 저장 전에 거절한다', async () => {
+  it('휴대전화가 누락되거나 올바르지 않으면 회원을 저장하지 않는다', async () => {
     const email = uniqueEmail('phone');
     const bad = await t.http
       .post('/api/v1/auth/signup')
@@ -96,8 +98,12 @@ describe('회원가입·이메일 인증', () => {
     await t.http
       .post('/api/v1/auth/signup')
       .send({ ...signupBody(email), phone: '' })
-      .expect(201);
-    expect((await t.prisma.user.findUniqueOrThrow({ where: { email } })).phone).toBeNull();
+      .expect(400);
+    await t.http
+      .post('/api/v1/auth/signup')
+      .send({ ...signupBody(email), phone: undefined })
+      .expect(400);
+    expect(await t.prisma.user.findUnique({ where: { email } })).toBeNull();
   });
 
   it('웹 폼과 같은 규칙으로 검증한다 (비밀번호 확인·필수 동의)', async () => {
@@ -209,4 +215,30 @@ describe('소셜 로그인', () => {
     const res = await t.http.get('/api/v1/auth/oauth/kakao/start?redirect=%2Fmy').expect(302);
     expect(res.headers.location).toBe('http://localhost:3000/login?error=oauth_failed');
   });
+});
+
+it('로컬 가입 고정 코드는 가입을 시작한 기기에서만 한 번 사용할 수 있고 실메일을 보내지 않는다', async () => {
+  vi.stubEnv('SIGNUP_PREVIEW_CODE', 'on');
+  resetEnvCache();
+  try {
+    const browser = supertest.agent(t.app.getHttpServer());
+    const email = uniqueEmail('preview');
+    const form = signupBody(email);
+    await browser
+      .post('/api/v1/auth/signup')
+      .send({ ...form, phone: '' })
+      .expect(400);
+    const start = await browser.post('/api/v1/auth/signup').send(form).expect(201);
+    expect(start.body.data.verificationMode).toBe('preview');
+    expect(t.mail.lastToken(email)).toBeUndefined();
+    const route = '/api/v1/auth/email-verification/preview';
+    await t.http.post(route).send({ code: '284600' }).expect(400);
+    await browser.post(route).send({ code: '123456' }).expect(400);
+    await browser.post(route).send({ code: '284600' }).expect(204);
+    await browser.post(route).send({ code: '284600' }).expect(400);
+    await browser.post('/api/v1/auth/login').send({ email, password: form.password }).expect(200);
+  } finally {
+    vi.unstubAllEnvs();
+    resetEnvCache();
+  }
 });

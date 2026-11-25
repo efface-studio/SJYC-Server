@@ -18,6 +18,8 @@ export async function createUser(
     data: {
       email: opts.email ?? uniqueEmail(),
       name: opts.name ?? '테스트',
+      birthDate: new Date('2000-01-12'),
+      phone: '010-0000-1212',
       roles: opts.roles ?? ['member'],
       status: opts.status ?? 'active',
       emailVerified: true,

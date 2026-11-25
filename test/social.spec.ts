@@ -15,7 +15,7 @@ it('두 증명값과 요청을 시작한 계정이 일치할 때만 연결하고
   const { user, agent } = await signedIn(t);
   const other = await signedIn(t);
   vi.spyOn(providers, 'authorize').mockImplementation((_p, state) => 'https://example.test/?state=' + state);
-  vi.spyOn(providers, 'providerSubject').mockResolvedValue('verified-subject');
+  vi.spyOn(providers, 'providerProfile').mockResolvedValue({ subject: 'verified-subject' });
   const proof = async (id: string | null) => {
     const { url, claim } = await social.start('kakao', id);
     const state = new URL(url).searchParams.get('state')!;
