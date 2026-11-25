@@ -1,3 +1,4 @@
+import { attendancePosition, scanInput, type AttendanceScan } from '../shared/domain/check-in-location';
 import { Body, Controller, Delete, Get, HttpCode, Module, Param, Post, Put, Query } from '@nestjs/common';
 import { z } from 'zod';
 import type { AuthUser } from '../auth/session.service';
@@ -23,7 +24,7 @@ const marksBody = z.object({
     .min(1)
     .max(500),
 });
-const checkInToggle = z.object({ open: z.boolean() });
+const checkInToggle = z.object({ open: z.boolean(), position: attendancePosition.optional() });
 
 type Target = z.infer<typeof target>;
 const asTarget = (t: Target) => ({ type: t.targetType, id: t.targetId });
@@ -75,7 +76,7 @@ export class AttendanceController {
     @Param('id') id: string,
     @Body(new ZodPipe(checkInToggle)) body: z.infer<typeof checkInToggle>,
   ) {
-    return this.attendance.setCheckIn(me, id, body.open);
+    return this.attendance.setCheckIn(me, id, body.open, body.position);
   }
 
   @Get('attendance/stats')
@@ -86,6 +87,12 @@ export class AttendanceController {
   @Get('me/attendance')
   mine(@CurrentUser() me: AuthUser) {
     return this.attendance.mine(me.id);
+  }
+
+  @Post('me/attendance/scan')
+  @HttpCode(200)
+  scan(@CurrentUser() me: AuthUser, @Body(new ZodPipe(scanInput)) body: AttendanceScan) {
+    return this.attendance.scan(me.id, body);
   }
 
   @Post('me/attendance/check-in')

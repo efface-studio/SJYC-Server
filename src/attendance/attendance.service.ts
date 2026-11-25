@@ -1,3 +1,11 @@
+import { RedisService } from '../redis/redis.service';
+import {
+  freshPosition,
+  distanceMeters,
+  CLUB_RADIUS_METERS,
+  type AttendanceScan,
+  type AttendancePosition,
+} from '../shared/domain/check-in-location';
 import { randomInt } from 'node:crypto';
 import { Injectable } from '@nestjs/common';
 import type { AttendanceRecord as RecordRow, AttendanceSession as SessionRow } from '@prisma/client';
@@ -73,6 +81,7 @@ export class AttendanceService {
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
     private readonly limiter: RateLimitService,
+    private readonly redis: RedisService,
   ) {}
 
   /** 센터 직원 이상은 모든 대상, 동아리 담당자는 자기 동아리만 */
@@ -148,7 +157,7 @@ export class AttendanceService {
       include: withRecords,
       orderBy: [{ date: 'desc' }, { createdAt: 'desc' }],
     });
-    return rows.map(toSession);
+    return Promise.all(rows.map((s) => this.withQr(s)));
   }
 
   /** 회차를 찾고 그 대상의 관리 권한을 확인한다 */
@@ -160,9 +169,36 @@ export class AttendanceService {
   }
 
   async get(user: AuthUser, id: string): Promise<AttendanceSession> {
-    return toSession(await this.loadSession(user, id));
+    return this.withQr(await this.loadSession(user, id));
   }
 
+  private async withQr(row: SessionWithRecords): Promise<AttendanceSession> {
+    const session = toSession(row);
+    if (session.targetType === 'club' && session.checkInClosesAt && session.checkInCode)
+      session.qrTicket = await this.redis.get(
+        'attendance:qr:' + row.id + ':' + session.checkInClosesAt + ':' + session.checkInCode,
+      );
+    return session;
+  }
+
+  async scan(userId: string, input: AttendanceScan) {
+    if (input.kind === 'program') return this.checkIn(userId, input.code, { targetType: 'program' });
+    if (!freshPosition(input.position))
+      throw new AppException('VALIDATION', '정확한 현재 위치를 다시 확인해 주세요.');
+    if (await this.limiter.exceeded('attendance:scan:' + userId, 30, 60))
+      throw new AppException('RATE_LIMITED');
+    const saved = await this.redis.get('attendance:ticket:' + input.ticket);
+    if (!saved) throw new AppException('VALIDATION', 'QR이 만료되었습니다. 새 QR을 스캔해 주세요.');
+    const { id, code, until, position } = JSON.parse(saved) as {
+      id: string;
+      code: string;
+      until: string;
+      position: AttendancePosition;
+    };
+    if (distanceMeters(position, input.position) > CLUB_RADIUS_METERS)
+      throw new AppException('VALIDATION', 'QR 생성 위치 반경 100m 안에서 스캔해 주세요.');
+    return this.checkIn(userId, code, { targetType: 'club', id, expires: new Date(until) });
+  }
   async create(
     user: AuthUser,
     target: AttendanceTarget,
@@ -252,7 +288,12 @@ export class AttendanceService {
     }
   }
 
-  async setCheckIn(user: AuthUser, id: string, open: boolean): Promise<AttendanceSession> {
+  async setCheckIn(
+    user: AuthUser,
+    id: string,
+    open: boolean,
+    position?: AttendancePosition,
+  ): Promise<AttendanceSession> {
     const s = await this.loadSession(user, id);
     const data = open
       ? {
@@ -260,6 +301,27 @@ export class AttendanceService {
           checkInClosesAt: new Date(Date.now() + CHECK_IN_MINUTES * 60_000),
         }
       : { checkInCode: null, checkInClosesAt: null };
+    if (open && s.targetType === 'club' && position && data.checkInClosesAt && data.checkInCode) {
+      if (!freshPosition(position))
+        throw new AppException('VALIDATION', '정확한 현재 위치를 다시 확인해 주세요.');
+      const ticket = Array.from({ length: 2 }, () => String(randomInt(100_000_000)).padStart(8, '0')).join(
+        '',
+      );
+      const until = data.checkInClosesAt.toISOString(),
+        code = data.checkInCode;
+      const result = await this.redis
+        .multi()
+        .set(
+          'attendance:ticket:' + ticket,
+          JSON.stringify({ id, code, until, position }),
+          'EX',
+          CHECK_IN_MINUTES * 60,
+        )
+        .set('attendance:qr:' + id + ':' + until + ':' + code, ticket, 'EX', CHECK_IN_MINUTES * 60)
+        .exec();
+      if (!result || result.some(([error]) => error))
+        throw new AppException('NETWORK', 'QR을 생성하지 못했습니다.');
+    }
     await this.prisma.$transaction(async (tx) => {
       await tx.attendanceSession.update({ where: { id }, data });
       await this.audit.record(
@@ -300,13 +362,25 @@ export class AttendanceService {
   }
 
   /** 본인 출석 코드 입력 — 틀리면 실패 횟수를 세고 5번이면 10분 잠근다 */
-  async checkIn(userId: string, code: string): Promise<MyAttendance> {
+  async checkIn(
+    userId: string,
+    code: string,
+    scope?: { targetType: 'club' | 'program'; id?: string; expires?: Date },
+  ): Promise<MyAttendance> {
     const key = `checkin:fail:${userId}`;
     if ((await this.limiter.count(key)) >= MAX_CHECK_IN_FAILURES) {
       throw new AppException('RATE_LIMITED', '출석 코드를 여러 번 틀렸습니다. 잠시 후 다시 시도해 주세요.');
     }
     const record = await this.prisma.attendanceRecord.findFirst({
-      where: { userId, session: { checkInCode: code, checkInClosesAt: { gt: new Date() } } },
+      where: {
+        userId,
+        session: {
+          id: scope?.id,
+          targetType: scope?.targetType,
+          checkInCode: code,
+          checkInClosesAt: { gt: new Date(), equals: scope?.expires },
+        },
+      },
       include: { session: true },
     });
     if (!record) {
@@ -317,13 +391,30 @@ export class AttendanceService {
     }
     await this.limiter.reset(key);
     // 담당자가 이미 체크했다면 그 결과를 존중한다
-    const updated =
-      record.status === null
-        ? await this.prisma.attendanceRecord.update({
-            where: { sessionId_userId: { sessionId: record.sessionId, userId } },
-            data: { status: 'present', method: 'self', checkedAt: new Date() },
-          })
-        : record;
+    const where = { sessionId: record.sessionId, userId };
+    if (record.status === null) {
+      const saved = await this.prisma.attendanceRecord.updateMany({
+        where: {
+          ...where,
+          status: null,
+          session: {
+            checkInCode: code,
+            checkInClosesAt: { gt: new Date(), equals: record.session.checkInClosesAt },
+          },
+        },
+        data: { status: 'present', method: 'self', checkedAt: new Date() },
+      });
+      if (!saved.count) {
+        const concurrent = await this.prisma.attendanceRecord.findUnique({
+          where: { sessionId_userId: where },
+        });
+        if (!concurrent?.status) throw new AppException('VALIDATION', '출석 시간이 지났습니다.');
+        return toMine(record.session, concurrent);
+      }
+    }
+    const updated = await this.prisma.attendanceRecord.findUniqueOrThrow({
+      where: { sessionId_userId: where },
+    });
     return toMine(record.session, updated);
   }
 }
