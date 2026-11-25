@@ -37,6 +37,36 @@ async function managerOf(clubId: string) {
 }
 
 describe('출석부', () => {
+  it('여러 회차를 동시에 열어도 각 코드가 발급된 회차만 출석시킨다', async () => {
+    const { club, members } = await clubWith(['회원']);
+    const { agent } = await managerOf(club.id);
+    const pupil = await loginAgent(t, members[0]!.email);
+    const sessions = await Promise.all(
+      ['A', 'B', 'C'].map(async (title) => {
+        const response = await agent
+          .post('/api/v1/attendance/sessions')
+          .send({ targetType: 'club', targetId: club.id, title, date: '2026-11-25' })
+          .expect(201);
+        return response.body.data.id as string;
+      }),
+    );
+    const issued = await Promise.all(
+      sessions.map(async (id) => {
+        const response = await agent
+          .post(`/api/v1/attendance/sessions/${id}/check-in`)
+          .send({ open: true })
+          .expect(200);
+        return response.body.data.checkInCode as string;
+      }),
+    );
+    expect(new Set(issued).size).toBe(sessions.length);
+    for (const [index, code] of issued.entries()) {
+      expect(code).toMatch(/^\d{4}$/);
+      const result = await pupil.post('/api/v1/me/attendance/check-in').send({ code }).expect(200);
+      expect(result.body.data.sessionId).toBe(sessions[index]);
+    }
+  });
+
   it('담당자는 자기 동아리만 관리하고, 회차를 만들면 명단이 채워진다', async () => {
     const { club, members } = await clubWith(['나회원', '가회원']);
     const other = await clubWith([]);
