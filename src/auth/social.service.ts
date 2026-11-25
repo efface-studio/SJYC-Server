@@ -10,12 +10,14 @@ import { SocialOnboarding } from './social-onboarding';
 import type { ProviderProfile } from './social-profile';
 
 interface Attempt {
+  admin?: boolean;
   provider: OAuthProvider;
   userId: string | null;
   verifier: string;
   claimHash: string;
 }
 interface Proof {
+  admin?: boolean;
   provider: OAuthProvider;
   userId: string | null;
   profile: ProviderProfile;
@@ -46,12 +48,12 @@ export class SocialService {
     };
   }
 
-  async start(provider: OAuthProvider, userId: string | null, web = false) {
-    const state = (web ? 'web.' : '') + randomToken(),
+  async start(provider: OAuthProvider, userId: string | null, web = false, admin = false) {
+    const state = (admin ? (web ? 'adminweb.' : 'adminapp.') : web ? 'web.' : '') + randomToken(),
       claim = randomToken(),
       verifier = randomToken();
     const url = providers.authorize(provider, state, verifier);
-    const attempt: Attempt = { provider, userId, verifier, claimHash: hashToken(claim) };
+    const attempt: Attempt = { admin, provider, userId, verifier, claimHash: hashToken(claim) };
     await this.redis.set('social:state:' + hashToken(state), JSON.stringify(attempt), 'EX', 600);
     return { url, claim };
   }
@@ -63,7 +65,7 @@ export class SocialService {
     if (attempt.provider !== provider) throw expired();
     const profile = await providers.providerProfile(provider, code, state, attempt.verifier, name);
     const receipt = randomToken();
-    const proof: Proof = { provider, userId: attempt.userId, profile };
+    const proof: Proof = { admin: attempt.admin, provider, userId: attempt.userId, profile };
     await this.redis.set(
       'social:proof:' + hashToken(receipt) + ':' + attempt.claimHash,
       JSON.stringify(proof),
@@ -103,10 +105,21 @@ export class SocialService {
     return this.resolveIdentity({ provider: 'apple', userId, profile }, userId);
   }
 
-  async finish(receipt: string, claim: string, userId: string | null) {
+  private async takeProof(receipt: string, claim: string, admin: boolean) {
     const raw = await this.redis.getdel('social:proof:' + hashToken(receipt) + ':' + hashToken(claim));
     if (!raw) throw expired();
     const proof = JSON.parse(raw) as Proof;
+    if (!!proof.admin !== admin) throw expired();
+    return proof;
+  }
+
+  async adminProof(receipt: string, claim: string) {
+    const proof = await this.takeProof(receipt, claim, true);
+    return { provider: proof.provider, subject: proof.profile.subject };
+  }
+
+  async finish(receipt: string, claim: string, userId: string | null) {
+    const proof = await this.takeProof(receipt, claim, false);
     return this.resolveIdentity(proof, userId);
   }
 

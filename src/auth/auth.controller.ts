@@ -1,3 +1,4 @@
+import { AdminSocial } from './admin-social';
 import { SocialOnboarding } from './social-onboarding';
 import { SocialController } from './social.controller';
 import { SocialService } from './social.service';
@@ -131,7 +132,7 @@ export class AuthController {
 
 @Module({
   controllers: [AuthController, SocialController],
-  providers: [AuthService, SessionService, SocialService, SocialOnboarding],
+  providers: [AuthService, SessionService, SocialService, SocialOnboarding, AdminSocial],
   exports: [SessionService],
 })
 export class AuthModule {}

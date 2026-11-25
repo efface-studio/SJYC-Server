@@ -1,3 +1,5 @@
+import { AdminSocial } from './admin-social';
+import { loginSchema, type LoginInput } from '../shared/domain/schemas';
 import { SocialOnboarding, onboardingInput } from './social-onboarding';
 import { Body, Controller, Delete, Get, Param, Post, Query, Req, Res } from '@nestjs/common';
 import { OAuthProvider } from '@prisma/client';
@@ -14,7 +16,8 @@ import { SocialService } from './social.service';
 
 const providerPipe = new ZodPipe(z.enum(OAuthProvider));
 const token = z.string().regex(/^[a-zA-Z0-9_-]{43}$/);
-const webState = z.string().regex(/^web\.[a-zA-Z0-9_-]{43}$/);
+const adminAppState = z.string().regex(/^adminapp\.[a-zA-Z0-9_-]{43}$/);
+const webState = z.string().regex(/^(?:web|adminweb)\.[a-zA-Z0-9_-]{43}$/);
 const webCookie = z.object({ state: webState, claim: token, next: z.string().max(1500) });
 
 function webDestination(next: unknown) {
@@ -32,6 +35,23 @@ function webDestination(next: unknown) {
   return url.href;
 }
 
+function adminDestination(next: unknown) {
+  const base = new URL('/admin', env().WEB_PUBLIC_URL);
+  try {
+    if (typeof next === 'string' && next.startsWith('/') && next.length <= 1500) {
+      const url = new URL(next, base);
+      if (
+        url.origin === base.origin &&
+        /^\/admin(?:\/|$)/.test(url.pathname) &&
+        !url.pathname.startsWith('/admin/login')
+      )
+        return url.href;
+    }
+  } catch {
+    /* return the console landing page */
+  }
+  return base.href;
+}
 const finishInput = z.object({ receipt: token, claim: token });
 type Finish = z.infer<typeof finishInput>;
 
@@ -39,6 +59,7 @@ type Finish = z.infer<typeof finishInput>;
 export class SocialController {
   constructor(
     private readonly social: SocialService,
+    private readonly adminSocial: AdminSocial,
     private readonly onboarding: SocialOnboarding,
     private readonly sessions: SessionService,
     private readonly limiter: RateLimitService,
@@ -168,7 +189,7 @@ export class SocialController {
     @Body(
       new ZodPipe(
         z.object({
-          state: z.union([webState, token]),
+          state: z.union([webState, token, adminAppState]),
           code: z.string().max(4096).optional(),
           error: z.string().max(128).optional(),
           user: z.string().max(4096).optional(),
@@ -232,14 +253,15 @@ export class SocialController {
     res: Response,
     next: string,
     link: boolean,
+    admin = false,
   ) {
     if (await this.limiter.exceeded('social:' + clientIp(req), 30, 600))
       throw new AppException('RATE_LIMITED');
-    const { url, claim } = await this.social.start(provider, link ? req.user!.id : null, true);
+    const { url, claim } = await this.social.start(provider, link ? req.user!.id : null, true, admin);
     const state = new URL(url).searchParams.get('state');
-    const destination = new URL(webDestination(next));
+    const destination = new URL(admin ? adminDestination(next) : webDestination(next));
     res.cookie(
-      'sjyc_oauth_' + provider,
+      (admin ? 'sjyc_admin_oauth_' : 'sjyc_oauth_') + provider,
       { state, claim, next: destination.pathname + destination.search + destination.hash },
       {
         path:
@@ -254,6 +276,54 @@ export class SocialController {
       },
     );
     return url;
+  }
+
+  @Public()
+  @Get('auth/admin-social/:provider/web-start')
+  async adminStartWeb(
+    @Param('provider', providerPipe) provider: OAuthProvider,
+    @Query('redirect') next: string,
+    @Req() req: AuthedRequest,
+    @Res() res: Response,
+  ) {
+    if (!configured(provider)) return res.redirect(env().WEB_PUBLIC_URL + '/admin/login?error=oauth_failed');
+    return res.redirect(await this.startWeb(provider, req, res, next, false, true));
+  }
+
+  @Public()
+  @Post('auth/admin-social/:provider/start')
+  async adminStart(@Param('provider', providerPipe) provider: OAuthProvider, @Req() req: AuthedRequest) {
+    if (await this.limiter.exceeded('social:' + clientIp(req), 30, 600))
+      throw new AppException('RATE_LIMITED');
+    return this.social.start(provider, null, false, true);
+  }
+
+  @Public()
+  @Post('auth/admin-social/complete')
+  async adminFinish(
+    @Body(new ZodPipe(finishInput)) input: Finish,
+    @Req() req: AuthedRequest,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    const identity = await this.social.adminProof(input.receipt, input.claim);
+    return this.adminSocial.finish(identity, req.get('user-agent'), res);
+  }
+
+  @Public()
+  @Get('auth/admin-social/link')
+  adminLinkState(@Req() req: AuthedRequest, @Res({ passthrough: true }) res: Response) {
+    res.set('Cache-Control', 'no-store');
+    return this.adminSocial.view(req.cookies);
+  }
+
+  @Public()
+  @Post('auth/admin-social/link')
+  adminLink(
+    @Body(new ZodPipe(loginSchema)) input: LoginInput,
+    @Req() req: AuthedRequest,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    return this.adminSocial.link(req.cookies, input, clientIp(req), req.get('user-agent'), res);
   }
 
   @Public()
@@ -297,9 +367,13 @@ export class SocialController {
       }
     }
     const web = webState.safeParse(query.state).success;
-    const cookieName = 'sjyc_oauth_' + provider;
+    const admin =
+      typeof query.state === 'string' &&
+      (query.state.startsWith('adminweb.') || query.state.startsWith('adminapp.'));
+    const mobileReturn = admin ? 'sjyc-admin://oauth-return' : 'sjyc://oauth-return';
+    const cookieName = (admin ? 'sjyc_admin_oauth_' : 'sjyc_oauth_') + provider;
     const browser = webCookie.safeParse(req.cookies?.[cookieName]);
-    const failed = env().WEB_PUBLIC_URL + '/login?error=';
+    const failed = env().WEB_PUBLIC_URL + (admin ? '/admin/login?error=' : '/login?error=');
     if (web) {
       if (!browser.success || browser.data.state !== query.state)
         return res.redirect(failed + 'oauth_expired');
@@ -311,12 +385,23 @@ export class SocialController {
       });
     }
     const input = z
-      .object({ state: web ? webState : token, code: z.string().min(1).max(4096) })
+      .object({ state: web ? webState : admin ? adminAppState : token, code: z.string().min(1).max(4096) })
       .safeParse(query);
     try {
       if (input.success) {
         const receipt = await this.social.callback(provider, input.data.state, input.data.code, appleName);
         if (web && browser.success) {
+          if (admin) {
+            const result = await this.adminSocial.finish(
+              await this.social.adminProof(receipt, browser.data.claim),
+              req.get('user-agent'),
+              res,
+            );
+            if (result.signedIn) return res.redirect(adminDestination(browser.data.next));
+            const page = new URL('/admin/login/link', env().WEB_PUBLIC_URL);
+            page.searchParams.set('next', browser.data.next);
+            return res.redirect(page.href);
+          }
           const id = await this.social.finish(receipt, browser.data.claim, req.user?.id ?? null);
           const result = await this.resolve(id, req, res);
           if (result.needsProfile) {
@@ -326,14 +411,14 @@ export class SocialController {
           }
           return res.redirect(webDestination(browser.data.next));
         }
-        return res.redirect('sjyc://oauth-return?receipt=' + encodeURIComponent(receipt));
+        return res.redirect(mobileReturn + '?receipt=' + encodeURIComponent(receipt));
       }
     } catch {
       /* 공급자 오류 응답이나 개인정보를 리다이렉트에 싣지 않는다. */
     }
     if (web)
       return res.redirect(failed + (query.error === 'access_denied' ? 'oauth_cancelled' : 'oauth_failed'));
-    return res.redirect('sjyc://oauth-return?error=cancelled');
+    return res.redirect(mobileReturn + '?error=cancelled');
   }
 
   @Public()
