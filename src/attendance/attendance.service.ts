@@ -13,7 +13,7 @@ import type { AuthUser } from '../auth/session.service';
 import { AuditService } from '../audit/audit.service';
 import { AppException } from '../common/app-exception';
 import { RateLimitService } from '../common/rate-limit';
-import { PrismaService } from '../prisma/prisma.service';
+import { PrismaService, type Tx } from '../prisma/prisma.service';
 import { memberStats } from '../shared/domain/attendance';
 import { can } from '../shared/domain/permissions';
 import type { AttendanceSessionInput } from '../shared/domain/schemas';
@@ -275,17 +275,20 @@ export class AttendanceService {
   }
 
   /** 열려 있는 다른 회차와 겹치지 않는 4자리 코드 */
-  private async issueCode(): Promise<string> {
-    const open = await this.prisma.attendanceSession.findMany({
+  private async issueCode(tx: Tx): Promise<string> {
+    // 여러 서버가 동시에 발급해도 다음 할당자는 앞 트랜잭션의 코드를 볼 수 있어야 한다.
+    await tx.$queryRaw`SELECT 1 FROM pg_advisory_xact_lock(hashtext('sjyc.attendance.check-in-code'))`;
+    const sessions = await tx.attendanceSession.findMany({
       where: { checkInCode: { not: null }, checkInClosesAt: { gt: new Date() } },
       select: { checkInCode: true },
     });
-    const taken = new Set(open.map((s) => s.checkInCode));
-    // ponytail: 동시에 두 회차가 같은 코드를 받을 확률은 1/10000 수준 — 문제가 되면 열린 코드에 부분 고유 인덱스
-    for (;;) {
-      const code = String(randomInt(10_000)).padStart(4, '0');
-      if (!taken.has(code)) return code;
-    }
+    const used = new Set(sessions.map((session) => session.checkInCode));
+    const codes = Array.from({ length: 10_000 }, (_, n) => String(n).padStart(4, '0')).filter(
+      (code) => !used.has(code),
+    );
+    if (!codes.length)
+      throw new AppException('CONFLICT', '사용할 수 있는 출석 코드가 없습니다. 잠시 후 다시 열어 주세요.');
+    return codes[randomInt(codes.length)]!;
   }
 
   async setCheckIn(
@@ -295,34 +298,34 @@ export class AttendanceService {
     position?: AttendancePosition,
   ): Promise<AttendanceSession> {
     const s = await this.loadSession(user, id);
-    const data = open
-      ? {
-          checkInCode: await this.issueCode(),
-          checkInClosesAt: new Date(Date.now() + CHECK_IN_MINUTES * 60_000),
-        }
-      : { checkInCode: null, checkInClosesAt: null };
-    if (open && s.targetType === 'club' && position && data.checkInClosesAt && data.checkInCode) {
-      if (!freshPosition(position))
-        throw new AppException('VALIDATION', '정확한 현재 위치를 다시 확인해 주세요.');
-      const ticket = Array.from({ length: 2 }, () => String(randomInt(100_000_000)).padStart(8, '0')).join(
-        '',
-      );
-      const until = data.checkInClosesAt.toISOString(),
-        code = data.checkInCode;
-      const result = await this.redis
-        .multi()
-        .set(
-          'attendance:ticket:' + ticket,
-          JSON.stringify({ id, code, until, position }),
-          'EX',
-          CHECK_IN_MINUTES * 60,
-        )
-        .set('attendance:qr:' + id + ':' + until + ':' + code, ticket, 'EX', CHECK_IN_MINUTES * 60)
-        .exec();
-      if (!result || result.some(([error]) => error))
-        throw new AppException('NETWORK', 'QR을 생성하지 못했습니다.');
-    }
     await this.prisma.$transaction(async (tx) => {
+      const data = open
+        ? {
+            checkInCode: await this.issueCode(tx),
+            checkInClosesAt: new Date(Date.now() + CHECK_IN_MINUTES * 60_000),
+          }
+        : { checkInCode: null, checkInClosesAt: null };
+      if (open && s.targetType === 'club' && position && data.checkInClosesAt && data.checkInCode) {
+        if (!freshPosition(position))
+          throw new AppException('VALIDATION', '정확한 현재 위치를 다시 확인해 주세요.');
+        const ticket = Array.from({ length: 2 }, () => String(randomInt(100_000_000)).padStart(8, '0')).join(
+          '',
+        );
+        const until = data.checkInClosesAt.toISOString(),
+          code = data.checkInCode;
+        const result = await this.redis
+          .multi()
+          .set(
+            'attendance:ticket:' + ticket,
+            JSON.stringify({ id, code, until, position }),
+            'EX',
+            CHECK_IN_MINUTES * 60,
+          )
+          .set('attendance:qr:' + id + ':' + until + ':' + code, ticket, 'EX', CHECK_IN_MINUTES * 60)
+          .exec();
+        if (!result || result.some(([error]) => error))
+          throw new AppException('NETWORK', 'QR을 생성하지 못했습니다.');
+      }
       await tx.attendanceSession.update({ where: { id }, data });
       await this.audit.record(
         user,
