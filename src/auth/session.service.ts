@@ -2,6 +2,8 @@ import { staffScope } from '../operations/developer-controls';
 import { Injectable } from '@nestjs/common';
 import type { User as UserRow } from '@prisma/client';
 import type { Response } from 'express';
+import { can } from '../shared/domain/permissions';
+import { defersOperatorContact, hasVerifiedContact } from './operator-login';
 import { env, isProd } from '../config/env';
 import { PrismaService } from '../prisma/prisma.service';
 import { hashToken, randomToken } from './tokens';
@@ -29,11 +31,21 @@ export class SessionService {
     return (remembered ? 30 * 24 : env().SESSION_TTL_HOURS) * 3_600_000;
   }
 
-  async create(userId: string, userAgent?: string): Promise<{ token: string; expiresAt: Date }> {
+  async create(
+    userId: string,
+    userAgent?: string,
+    operatorLogin = false,
+  ): Promise<{ token: string; expiresAt: Date }> {
     const token = randomToken();
     const expiresAt = new Date(Date.now() + this.ttlMs());
     await this.prisma.session.create({
-      data: { tokenHash: hashToken(token), userId, expiresAt, userAgent: userAgent?.slice(0, 200) },
+      data: {
+        tokenHash: hashToken(token),
+        userId,
+        expiresAt,
+        operatorLogin,
+        userAgent: userAgent?.slice(0, 200),
+      },
     });
     return { token, expiresAt };
   }
@@ -45,13 +57,13 @@ export class SessionService {
       include: { user: { include: { managedClubs: { select: { clubId: true } } } } },
     });
     if (!s || s.expiresAt.getTime() <= Date.now() || s.user.status !== 'active') return null;
-    if (
-      s.user.temporarySignupAt &&
-      !s.user.emailVerified &&
-      !s.user.signupPhoneVerifiedAt &&
-      (!isTemporaryMember(s.user) || s.user.managedClubs.length > 0)
-    )
-      return null;
+    if (!hasVerifiedContact(s.user)) {
+      if (can(s.user, 'admin.access')) {
+        if (!s.operatorLogin || !defersOperatorContact(s.user)) return null;
+      } else if (s.user.temporarySignupAt && (!isTemporaryMember(s.user) || s.user.managedClubs.length > 0)) {
+        return null;
+      }
+    }
     const { managedClubs, ...row } = s.user;
     const user: AuthUser = {
       ...row,

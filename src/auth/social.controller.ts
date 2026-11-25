@@ -142,7 +142,7 @@ export class SocialController {
   }
 
   private async resolve(
-    result: { onboarding: string } | { userId: string },
+    result: { onboarding: string } | { userId: string; operatorLogin?: boolean },
     req: AuthedRequest,
     res: Response,
   ) {
@@ -150,7 +150,10 @@ export class SocialController {
       res.cookie(this.draftCookie, result.onboarding, { ...this.cookieOptions(), maxAge: 900000 });
       return { signedIn: false, needsProfile: true };
     }
-    if (!req.user) await this.signIn(result.userId, req, res);
+    if (!req.user) {
+      const session = await this.sessions.create(result.userId, req.get('user-agent'), result.operatorLogin);
+      this.sessions.setCookie(res, session.token, session.expiresAt);
+    }
     return { signedIn: true, needsProfile: false };
   }
 
@@ -221,11 +224,6 @@ export class SocialController {
       303,
       env().API_PUBLIC_URL.replace(/\/$/, '') + '/auth/social/apple/callback?response=' + handle,
     );
-  }
-
-  private async signIn(id: string, req: AuthedRequest, res: Response) {
-    const session = await this.sessions.create(id, req.get('user-agent'));
-    this.sessions.setCookie(res, session.token, session.expiresAt);
   }
 
   @Public()

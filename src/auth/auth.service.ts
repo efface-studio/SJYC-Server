@@ -9,6 +9,7 @@ import { env } from '../config/env';
 import { MailService, requireMailDelivery } from '../mail/mail.service';
 import { PrismaService } from '../prisma/prisma.service';
 import type { LoginInput, SignupInput } from '../shared/domain/schemas';
+import { defersOperatorContact, hasVerifiedContact } from './operator-login';
 import { PhoneSignup } from './phone-signup';
 import { isTemporaryMember, SessionService } from './session.service';
 import { hashToken, randomToken } from './tokens';
@@ -99,8 +100,8 @@ export class AuthService {
       throw new AppException('FORBIDDEN', '이용이 제한된 계정입니다. 센터에 문의해 주세요.');
     }
     if (
-      !user.emailVerified &&
-      !user.signupPhoneVerifiedAt &&
+      !hasVerifiedContact(user) &&
+      !defersOperatorContact(user) &&
       (!isTemporaryMember(user) || (await this.prisma.clubManager.count({ where: { userId: user.id } })))
     ) {
       throw new AppException('FORBIDDEN', '이메일 인증을 완료한 뒤 로그인할 수 있습니다.');
@@ -111,7 +112,7 @@ export class AuthService {
 
   async login(input: LoginInput, ip: string, userAgent?: string) {
     const user = await this.verifyLogin(input, ip);
-    const session = await this.sessions.create(user.id, userAgent);
+    const session = await this.sessions.create(user.id, userAgent, defersOperatorContact(user));
     const managed = await this.prisma.clubManager.findMany({
       where: { userId: user.id },
       select: { clubId: true },

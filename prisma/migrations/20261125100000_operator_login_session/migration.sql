@@ -1,0 +1,1 @@
+ALTER TABLE "Session" ADD COLUMN "operatorLogin" BOOLEAN NOT NULL DEFAULT false;

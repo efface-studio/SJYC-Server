@@ -169,26 +169,36 @@ it('관리자 앱에서만 복귀하는 소셜 인증은 기존 계정 연동 �
   await native.get(session).expect(401);
 });
 
-it('관리자 앱에서 기존 직원 계정 연동을 마친 뒤 같은 소셜 계정으로 재로그인할 수 있다', async () => {
-  const staff = await createUser(t, { roles: ['staff'] });
-  mockProfile(uniqueEmail('native'));
-  async function authenticate() {
-    const client = agent();
-    const { url, claim } = (await client.post(path + '/kakao/start')).body.data;
-    const cb = await t.http.get(callback(url));
-    const receipt = new URL(cb.headers.location!).searchParams.get('receipt');
-    const result = await client
-      .post(path + '/complete')
-      .send({ receipt, claim })
-      .expect(201);
-    return { client, data: result.body.data };
-  }
-  const first = await authenticate();
-  await first.client.post(pending).send({ email: staff.email, password: PASSWORD }).expect(201);
-  const second = await authenticate();
-  expect(second.data).toEqual({ signedIn: true, needsLink: false });
-  expect((await second.client.get(session).expect(200)).body.data.user.id).toBe(staff.id);
-});
+it.each(['required', 'deferred'] as const)(
+  '관리자 앱에서 %s 정책에 따라 기존 직원 계정을 연동하고 같은 소셜 계정으로 로그인한다',
+  async (policy) => {
+    vi.stubEnv('OPERATOR_CONTACT_POLICY', policy);
+    resetEnvCache();
+    const staff = await createUser(t, { roles: ['staff'] });
+    if (policy === 'deferred')
+      await t.prisma.user.update({
+        where: { id: staff.id },
+        data: { emailVerified: false, temporarySignupAt: new Date() },
+      });
+    mockProfile(uniqueEmail('native'));
+    async function authenticate() {
+      const client = agent();
+      const { url, claim } = (await client.post(path + '/kakao/start')).body.data;
+      const cb = await t.http.get(callback(url));
+      const receipt = new URL(cb.headers.location!).searchParams.get('receipt');
+      const result = await client
+        .post(path + '/complete')
+        .send({ receipt, claim })
+        .expect(201);
+      return { client, data: result.body.data };
+    }
+    const first = await authenticate();
+    await first.client.post(pending).send({ email: staff.email, password: PASSWORD }).expect(201);
+    const second = await authenticate();
+    expect(second.data).toEqual({ signedIn: true, needsLink: false });
+    expect((await second.client.get(session).expect(200)).body.data.user.id).toBe(staff.id);
+  },
+);
 
 it('관리자 앱 설정에서 연결하면 같은 관리자 세션으로 돌아오며 일반 회원은 관리자 경로를 이용할 수 없다', async () => {
   const { signedIn } = await import('./fixtures');

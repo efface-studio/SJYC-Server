@@ -2,6 +2,7 @@ import { z } from 'zod';
 
 const schema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
+  OPERATOR_CONTACT_POLICY: z.enum(['required', 'deferred']).default('required'),
   SIGNUP_TEMPORARY_REGISTRATION: z.enum(['off', 'on']).default('off'),
   SIGNUP_PREVIEW_CODE: z.enum(['off', 'on']).default('off'),
   PORT: z.coerce.number().int().positive().default(4000),

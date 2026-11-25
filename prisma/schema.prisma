@@ -93,6 +93,7 @@ model Session {
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   expiresAt DateTime
   remembered Boolean @default(false)
+  operatorLogin Boolean @default(false)
   userAgent String?
   createdAt DateTime @default(now())
 
