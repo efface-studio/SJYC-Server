@@ -1,3 +1,4 @@
+import { UpdatesModule } from './updates/updates.controller';
 import { OperationsModule } from './operations/operations.controller';
 import { Module } from '@nestjs/common';
 import { APP_FILTER, APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
@@ -29,6 +30,7 @@ import { RedisModule } from './redis/redis.service';
     MailModule,
     NotificationsModule,
     HealthModule,
+    UpdatesModule,
     AuthModule,
     MeModule,
     ProgramsModule,
