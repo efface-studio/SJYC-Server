@@ -1,3 +1,4 @@
+import { SocialOnboarding, onboardingInput } from './social-onboarding';
 import { Body, Controller, Delete, Get, Param, Post, Query, Req, Res } from '@nestjs/common';
 import { OAuthProvider } from '@prisma/client';
 import type { Response } from 'express';
@@ -9,7 +10,7 @@ import { ZodPipe } from '../common/zod.pipe';
 import { SessionService } from './session.service';
 import { env, isProd } from '../config/env';
 import { availableProviders, configured } from './social-provider';
-import { SocialService, UnlinkedSocialAccount } from './social.service';
+import { SocialService } from './social.service';
 
 const providerPipe = new ZodPipe(z.enum(OAuthProvider));
 const token = z.string().regex(/^[a-zA-Z0-9_-]{43}$/);
@@ -38,6 +39,7 @@ type Finish = z.infer<typeof finishInput>;
 export class SocialController {
   constructor(
     private readonly social: SocialService,
+    private readonly onboarding: SocialOnboarding,
     private readonly sessions: SessionService,
     private readonly limiter: RateLimitService,
   ) {}
@@ -82,14 +84,126 @@ export class SocialController {
   @Public()
   @Post('auth/social/apple/native/complete')
   async nativeFinish(
-    @Body(new ZodPipe(z.object({ state: token, identityToken: z.string().min(1).max(16384) })))
-    body: { state: string; identityToken: string },
+    @Body(
+      new ZodPipe(
+        z.object({
+          state: token,
+          identityToken: z.string().min(1).max(16384),
+          name: z.string().trim().max(100).optional(),
+        }),
+      ),
+    )
+    body: { state: string; identityToken: string; name?: string },
     @Req() req: AuthedRequest,
     @Res({ passthrough: true }) res: Response,
   ) {
-    const id = await this.social.finishNativeApple(body.state, body.identityToken, req.user?.id ?? null);
-    if (!req.user) await this.signIn(id, req, res);
+    const id = await this.social.finishNativeApple(
+      body.state,
+      body.identityToken,
+      req.user?.id ?? null,
+      body.name,
+    );
+    return this.resolve(id, req, res);
+  }
+
+  private readonly draftCookie = 'sjyc_social_profile';
+
+  private cookieOptions() {
+    return {
+      httpOnly: true,
+      sameSite: 'lax' as const,
+      secure: isProd() || env().API_PUBLIC_URL.startsWith('https://'),
+      path: new URL(env().API_PUBLIC_URL).pathname.replace(/\/$/, '') + '/auth/social/onboarding',
+    };
+  }
+
+  private async resolve(
+    result: { onboarding: string } | { userId: string },
+    req: AuthedRequest,
+    res: Response,
+  ) {
+    if ('onboarding' in result) {
+      res.cookie(this.draftCookie, result.onboarding, { ...this.cookieOptions(), maxAge: 900000 });
+      return { signedIn: false, needsProfile: true };
+    }
+    if (!req.user) await this.signIn(result.userId, req, res);
+    return { signedIn: true, needsProfile: false };
+  }
+
+  @Public()
+  @Get('auth/social/onboarding')
+  draft(@Req() req: AuthedRequest, @Res({ passthrough: true }) res: Response) {
+    res.set('Cache-Control', 'no-store');
+    return this.onboarding.view(String(req.cookies?.[this.draftCookie] ?? ''));
+  }
+
+  @Public()
+  @Post('auth/social/onboarding/email')
+  async email(
+    @Req() req: AuthedRequest,
+    @Body(new ZodPipe(z.object({ email: z.email().max(254) }))) body: { email: string },
+  ) {
+    if (await this.limiter.exceeded('social-email:' + clientIp(req), 20, 600))
+      throw new AppException('RATE_LIMITED');
+    await this.onboarding.requestCode(String(req.cookies?.[this.draftCookie] ?? ''), body.email);
+  }
+
+  @Public()
+  @Post('auth/social/onboarding')
+  async save(
+    @Req() req: AuthedRequest,
+    @Res({ passthrough: true }) res: Response,
+    @Body(new ZodPipe(onboardingInput)) input: z.infer<typeof onboardingInput>,
+  ) {
+    if (req.user) throw new AppException('CONFLICT', '이미 로그인한 계정이 있습니다.');
+    const id = await this.onboarding.complete(String(req.cookies?.[this.draftCookie] ?? ''), input);
+    res.clearCookie(this.draftCookie, this.cookieOptions());
+    await this.signIn(id, req, res);
     return { signedIn: true };
+  }
+
+  @Public()
+  @Post('auth/social/apple/callback')
+  async applePost(
+    @Body(
+      new ZodPipe(
+        z.object({
+          state: z.union([webState, token]),
+          code: z.string().max(4096).optional(),
+          error: z.string().max(128).optional(),
+          user: z.string().max(4096).optional(),
+        }),
+      ),
+    )
+    body: { state: string; code?: string; error?: string; user?: string },
+    @Res() res: Response,
+  ) {
+    let name: string | undefined;
+    try {
+      const parsed = z
+        .object({
+          name: z.object({
+            firstName: z.string().max(50).optional(),
+            lastName: z.string().max(50).optional(),
+          }),
+        })
+        .safeParse(JSON.parse(body.user ?? '{}'));
+      if (parsed.success)
+        name = [parsed.data.name.lastName, parsed.data.name.firstName].filter(Boolean).join(' ');
+    } catch {
+      /* Apple provides the name only on initial consent. */
+    }
+    const handle = await this.social.relayApple({
+      state: body.state,
+      code: body.code,
+      error: body.error,
+      name,
+    });
+    res.set({ 'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer' });
+    return res.redirect(
+      303,
+      env().API_PUBLIC_URL.replace(/\/$/, '') + '/auth/social/apple/callback?response=' + handle,
+    );
   }
 
   private async signIn(id: string, req: AuthedRequest, res: Response) {
@@ -173,6 +287,15 @@ export class SocialController {
     @Res() res: Response,
   ) {
     res.set({ 'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer' });
+    let appleName: string | undefined;
+    if (provider === 'apple' && token.safeParse(query.response).success) {
+      try {
+        query = await this.social.readAppleRelay(String(query.response));
+        appleName = typeof query.name === 'string' ? query.name : undefined;
+      } catch {
+        return res.redirect(env().WEB_PUBLIC_URL + '/login?error=oauth_expired');
+      }
+    }
     const web = webState.safeParse(query.state).success;
     const cookieName = 'sjyc_oauth_' + provider;
     const browser = webCookie.safeParse(req.cookies?.[cookieName]);
@@ -192,16 +315,20 @@ export class SocialController {
       .safeParse(query);
     try {
       if (input.success) {
-        const receipt = await this.social.callback(provider, input.data.state, input.data.code);
+        const receipt = await this.social.callback(provider, input.data.state, input.data.code, appleName);
         if (web && browser.success) {
           const id = await this.social.finish(receipt, browser.data.claim, req.user?.id ?? null);
-          if (!req.user) await this.signIn(id, req, res);
+          const result = await this.resolve(id, req, res);
+          if (result.needsProfile) {
+            const page = new URL('/oauth/profile', env().WEB_PUBLIC_URL);
+            page.searchParams.set('next', browser.data.next);
+            return res.redirect(page.href);
+          }
           return res.redirect(webDestination(browser.data.next));
         }
         return res.redirect('sjyc://oauth-return?receipt=' + encodeURIComponent(receipt));
       }
-    } catch (error) {
-      if (web && error instanceof UnlinkedSocialAccount) return res.redirect(failed + 'oauth_unlinked');
+    } catch {
       /* 공급자 오류 응답이나 개인정보를 리다이렉트에 싣지 않는다. */
     }
     if (web)
@@ -217,8 +344,7 @@ export class SocialController {
     @Res({ passthrough: true }) res: Response,
   ) {
     const id = await this.social.finish(input.receipt, input.claim, req.user?.id ?? null);
-    if (!req.user) await this.signIn(id, req, res);
-    return { signedIn: true };
+    return this.resolve(id, req, res);
   }
 
   @Delete('me/social/:provider')

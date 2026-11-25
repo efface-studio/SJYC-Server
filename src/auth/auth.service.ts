@@ -29,7 +29,10 @@ export class AuthService {
     private readonly limiter: RateLimitService,
   ) {}
 
-  async signup(input: SignupInput, ip: string): Promise<{ requiresEmailVerification: true }> {
+  async signup(
+    input: SignupInput,
+    ip: string,
+  ): Promise<{ requiresEmailVerification: true; previewTicket?: string }> {
     if (await this.limiter.exceeded(`signup:ip:${ip}`, 10, 3600)) throw new AppException('RATE_LIMITED');
     const email = input.email.toLowerCase();
     const existing = await this.prisma.user.findUnique({ where: { email } });
@@ -53,7 +56,8 @@ export class AuthService {
           email,
           name: input.name,
           birthYear: input.birthYear,
-          phone: input.phone || null,
+          phone: input.phone,
+          birthDate: input.birthDate ? new Date(input.birthDate) : undefined,
           passwordHash: await argon2.hash(input.password),
           consents: consents as unknown as Prisma.InputJsonValue,
         },
@@ -66,14 +70,13 @@ export class AuthService {
       }
       throw e;
     }
-    await this.sendVerification(user.id, email);
-    return { requiresEmailVerification: true };
+    return this.verificationStep(user.id, email);
   }
 
   private async retryPendingSignup(
     user: User | null,
     password: string,
-  ): Promise<{ requiresEmailVerification: true }> {
+  ): Promise<{ requiresEmailVerification: true; previewTicket?: string }> {
     if (
       !user ||
       user.status !== 'active' ||
@@ -87,13 +90,60 @@ export class AuthService {
       });
     }
     await this.checkVerificationLimit(user.email);
-    await this.sendVerification(user.id, user.email);
-    return { requiresEmailVerification: true };
+    return this.verificationStep(user.id, user.email);
+  }
+
+  private async verificationStep(id: string, email: string) {
+    if (env().SIGNUP_PREVIEW_CODE === 'on') {
+      const ticket = randomToken();
+      await this.prisma.authToken.create({
+        data: {
+          tokenHash: hashToken('signup-preview:' + ticket),
+          purpose: 'verify_email',
+          userId: id,
+          expiresAt: new Date(Date.now() + 15 * 60_000),
+        },
+      });
+      return { requiresEmailVerification: true as const, previewTicket: ticket };
+    }
+    await this.sendVerification(id, email);
+    return { requiresEmailVerification: true as const };
+  }
+
+  async confirmPreview(ticket: string, code: string) {
+    if (env().SIGNUP_PREVIEW_CODE !== 'on' || !/^[a-zA-Z0-9_-]{43}$/.test(ticket))
+      throw new AppException('VALIDATION', '가입을 다시 진행해 주세요.');
+    if (await this.limiter.exceeded('signup-preview:' + hashToken(ticket), 10, 900))
+      throw new AppException('RATE_LIMITED');
+    if (code !== '284600') throw new AppException('VALIDATION', '인증 코드가 일치하지 않습니다.');
+    // 일반 메일 링크는 별도 네임스페이스의 토큰을 사용할 수 없다.
+    const result = await this.prisma.$transaction(async (tx) => {
+      const token = await tx.authToken.findUnique({
+        where: { tokenHash: hashToken('signup-preview:' + ticket) },
+      });
+      if (!token || token.purpose !== 'verify_email') return false;
+      const used = await tx.authToken.updateMany({
+        where: { id: token.id, usedAt: null, expiresAt: { gt: new Date() } },
+        data: { usedAt: new Date() },
+      });
+      if (!used.count) return false;
+      const updated = await tx.user.updateMany({
+        where: { id: token.userId, status: 'active', emailVerified: false },
+        data: { emailVerified: true },
+      });
+      return updated.count === 1;
+    });
+    if (!result)
+      throw new AppException(
+        'VALIDATION',
+        '인증 요청이 만료되었습니다. 같은 정보로 가입을 다시 진행해 주세요.',
+      );
   }
 
   /** 가입 여부와 관계없이 같은 응답 — 미인증 계정에만 실제로 보낸다 */
   async resendVerification(rawEmail: string): Promise<void> {
     const email = rawEmail.toLowerCase();
+    if (env().SIGNUP_PREVIEW_CODE === 'on') return;
     await this.checkVerificationLimit(email);
     const user = await this.prisma.user.findUnique({ where: { email } });
     if (user && !user.emailVerified && user.status === 'active') await this.sendVerification(user.id, email);
@@ -101,6 +151,7 @@ export class AuthService {
 
   /** 메일 링크 확인 — 성공 여부만 돌려준다 */
   async confirmEmail(token: string): Promise<boolean> {
+    if (!/^[a-zA-Z0-9_-]{43}$/.test(token)) return false;
     const t = await this.consumeToken(token, 'verify_email');
     if (!t) return false;
     await this.prisma.user.update({ where: { id: t.userId }, data: { emailVerified: true } });

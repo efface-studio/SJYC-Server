@@ -2,6 +2,7 @@ import { z } from 'zod';
 
 const schema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
+  SIGNUP_PREVIEW_CODE: z.enum(['off', 'on']).default('off'),
   PORT: z.coerce.number().int().positive().default(4000),
   DATABASE_URL: z.string().min(1),
   REDIS_URL: z.string().min(1),
@@ -16,6 +17,8 @@ const schema = z.object({
   GOOGLE_CLIENT_SECRET: z.string().optional(),
   APPLE_CLIENT_ID: z.string().optional(),
   APPLE_CLIENT_SECRET: z.string().optional(),
+  APPLE_WEB_LOGIN_ENABLED: z.enum(['on', 'off']).default('off'),
+  APPLE_IOS_LOGIN_ENABLED: z.enum(['on', 'off']).default('off'),
   APPLE_IOS_BUNDLE_ID: z.string().optional(),
   APPLE_TEAM_ID: z.string().optional(),
   APPLE_KEY_ID: z.string().optional(),
@@ -50,6 +53,8 @@ export function env(): Env {
   if (parsed.data.NODE_ENV === 'production' && !parsed.data.SMTP_URL) {
     throw new Error('환경 변수가 올바르지 않습니다 — 운영에서는 SMTP_URL 이 필요합니다 (인증·재설정 메일)');
   }
+  if (parsed.data.NODE_ENV === 'production' && parsed.data.SIGNUP_PREVIEW_CODE === 'on')
+    throw new Error('운영 환경에서는 고정 가입 코드를 사용할 수 없습니다.');
   cached = parsed.data;
   return cached;
 }
