@@ -17,6 +17,7 @@ export interface ConsentRecord {
 }
 
 export interface User {
+  permissionScope?: string[];
   id: string;
   email: string;
   name: string;

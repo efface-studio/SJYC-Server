@@ -1,3 +1,5 @@
+import { PrismaService } from '../prisma/prisma.service';
+import { checkActivity, type Activity } from '../operations/developer-controls';
 import {
   type CanActivate,
   createParamDecorator,
@@ -16,6 +18,7 @@ export type AuthedRequest = Request & {
   session?: { token: string; expiresAt: Date };
 };
 
+export const OpenActivity = (activity: Activity) => SetMetadata('center:activity', activity);
 const PUBLIC = 'auth:public';
 const PERMISSION = 'auth:permission';
 
@@ -35,6 +38,7 @@ export class AuthGuard implements CanActivate {
   constructor(
     private readonly reflector: Reflector,
     private readonly sessions: SessionService,
+    private readonly db: PrismaService,
   ) {}
 
   async canActivate(ctx: ExecutionContext): Promise<boolean> {
@@ -56,6 +60,8 @@ export class AuthGuard implements CanActivate {
     if (!req.user) throw new AppException('UNAUTHENTICATED');
     const permission = this.reflector.getAllAndOverride<Permission | undefined>(PERMISSION, targets);
     if (permission && !can(req.user, permission)) throw new AppException('FORBIDDEN');
+    const activity = this.reflector.get<Activity>('center:activity', ctx.getHandler());
+    if (activity) await checkActivity(this.db, activity);
     return true;
   }
 }

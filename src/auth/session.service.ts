@@ -1,3 +1,4 @@
+import { staffScope } from '../operations/developer-controls';
 import { Injectable } from '@nestjs/common';
 import type { User as UserRow } from '@prisma/client';
 import type { Response } from 'express';
@@ -8,7 +9,7 @@ import { hashToken, randomToken } from './tokens';
 export const SESSION_COOKIE = 'sjyc_session';
 
 /** 세션의 회원 + 담당 동아리 ID (권한 판단에 쓴다) */
-export type AuthUser = UserRow & { managedClubIds: string[] };
+export type AuthUser = UserRow & { managedClubIds: string[]; permissionScope?: string[] };
 
 export interface ResolvedSession {
   user: AuthUser;
@@ -41,7 +42,11 @@ export class SessionService {
     });
     if (!s || s.expiresAt.getTime() <= Date.now() || s.user.status !== 'active') return null;
     const { managedClubs, ...row } = s.user;
-    const user: AuthUser = { ...row, managedClubIds: managedClubs.map((m) => m.clubId) };
+    const user: AuthUser = {
+      ...row,
+      permissionScope: await staffScope(this.prisma, row.id, row.roles),
+      managedClubIds: managedClubs.map((m) => m.clubId),
+    };
     if (s.expiresAt.getTime() - Date.now() >= this.ttlMs() / 2) {
       return { user, expiresAt: s.expiresAt, renewed: false };
     }

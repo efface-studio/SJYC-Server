@@ -1,3 +1,4 @@
+import { OpenActivity } from '../common/auth';
 import { Body, Controller, Get, Module, Param, Post } from '@nestjs/common';
 import type { User as UserRow } from '@prisma/client';
 import { CurrentUser, Public } from '../common/auth';
@@ -31,6 +32,7 @@ export class ClubsController {
     return this.clubs.posts(id, me.id);
   }
 
+  @OpenActivity('clubs')
   @Post('clubs/:id/applications')
   apply(
     @CurrentUser() me: UserRow,
