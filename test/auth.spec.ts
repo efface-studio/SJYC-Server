@@ -52,10 +52,52 @@ describe('회원가입·이메일 인증', () => {
 
   it('중복 이메일은 CONFLICT(EMAIL_TAKEN) 와 필드 오류', async () => {
     const email = uniqueEmail('dup');
-    await t.http.post('/api/v1/auth/signup').send(signupBody(email)).expect(201);
+    await createUser(t, { email });
     const res = await t.http.post('/api/v1/auth/signup').send(signupBody(email.toUpperCase())).expect(409);
     expect(res.body.error).toMatchObject({ code: 'CONFLICT', reason: 'EMAIL_TAKEN' });
     expect(res.body.error.fieldErrors.email).toBeTruthy();
+  });
+
+  it('발송 실패 후 같은 자격 증명으로 이전 계정의 인증을 이어 간다', async () => {
+    const email = uniqueEmail('retry');
+    const request = { ...signupBody(email), phone: '010-0000-0000' };
+    vi.spyOn(t.mail, 'send').mockRejectedValueOnce(new Error('SMTP unavailable'));
+    const failed = await t.http.post('/api/v1/auth/signup').send(request).expect(503);
+    expect(failed.body.error.message).toContain('계정은 등록');
+    await t.http
+      .post('/api/v1/auth/signup')
+      .send({ ...request, password: 'different7', passwordConfirm: 'different7' })
+      .expect(409);
+    expect(t.mail.lastToken(email)).toBeUndefined();
+    await t.http
+      .post('/api/v1/auth/signup')
+      .send({ ...request, name: '재시도', phone: '' })
+      .expect(201);
+    expect(
+      await t.prisma.user.findMany({
+        where: { email },
+        select: { emailVerified: true, name: true, phone: true },
+      }),
+    ).toEqual([{ emailVerified: false, name: request.name, phone: request.phone }]);
+    const old = t.mail.lastToken(email)!;
+    vi.spyOn(t.mail, 'send').mockRejectedValueOnce(new Error('SMTP unavailable'));
+    await t.http.post('/api/v1/auth/email-verification/resend').send({ email }).expect(503);
+    const verified = await t.http.get(`/api/v1/auth/email-verification/confirm?token=${old}`).expect(302);
+    expect(verified.headers.location).toContain('verified=1');
+  });
+
+  it('휴대전화는 비워둘 수 있고 잘못된 번호는 저장 전에 거절한다', async () => {
+    const email = uniqueEmail('phone');
+    const bad = await t.http
+      .post('/api/v1/auth/signup')
+      .send({ ...signupBody(email), phone: '123' })
+      .expect(400);
+    expect(bad.body.error.fieldErrors.phone).toBeTruthy();
+    await t.http
+      .post('/api/v1/auth/signup')
+      .send({ ...signupBody(email), phone: '' })
+      .expect(201);
+    expect((await t.prisma.user.findUniqueOrThrow({ where: { email } })).phone).toBeNull();
   });
 
   it('웹 폼과 같은 규칙으로 검증한다 (비밀번호 확인·필수 동의)', async () => {
