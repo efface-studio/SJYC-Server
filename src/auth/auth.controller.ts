@@ -9,7 +9,7 @@ import { Body, Controller, Get, HttpCode, Module, Post, Query, Req, Res } from '
 import type { Request, Response } from 'express';
 import { z } from 'zod';
 import { AppException } from '../common/app-exception';
-import { type AuthedRequest, Public } from '../common/auth';
+import { type AuthedRequest, Public, RememberDevice } from '../common/auth';
 import { clientIp } from '../common/rate-limit';
 import { apiInput, ZodPipe } from '../common/zod.pipe';
 import { env } from '../config/env';
@@ -42,6 +42,13 @@ export class AuthController {
   session(@Req() req: AuthedRequest): Session {
     if (!req.user || !req.session) throw new AppException('UNAUTHENTICATED');
     return { user: toUser(req.user), expiresAt: req.session.expiresAt.toISOString() };
+  }
+
+  @RememberDevice()
+  @Post('session/remember')
+  @HttpCode(200)
+  rememberDevice(@Req() req: AuthedRequest): Session {
+    return this.session(req);
   }
 
   @Public()
