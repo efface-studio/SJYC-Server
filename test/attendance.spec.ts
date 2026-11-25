@@ -37,6 +37,36 @@ async function managerOf(clubId: string) {
 }
 
 describe('출석부', () => {
+  it('여러 회차를 동시에 열어도 각 코드가 발급된 회차만 출석시킨다', async () => {
+    const { club, members } = await clubWith(['회원']);
+    const { agent } = await managerOf(club.id);
+    const pupil = await loginAgent(t, members[0]!.email);
+    const sessions = await Promise.all(
+      ['A', 'B', 'C'].map(async (title) => {
+        const response = await agent
+          .post('/api/v1/attendance/sessions')
+          .send({ targetType: 'club', targetId: club.id, title, date: '2026-11-25' })
+          .expect(201);
+        return response.body.data.id as string;
+      }),
+    );
+    const issued = await Promise.all(
+      sessions.map(async (id) => {
+        const response = await agent
+          .post(`/api/v1/attendance/sessions/${id}/check-in`)
+          .send({ open: true })
+          .expect(200);
+        return response.body.data.checkInCode as string;
+      }),
+    );
+    expect(new Set(issued).size).toBe(sessions.length);
+    for (const [index, code] of issued.entries()) {
+      expect(code).toMatch(/^\d{4}$/);
+      const result = await pupil.post('/api/v1/me/attendance/check-in').send({ code }).expect(200);
+      expect(result.body.data.sessionId).toBe(sessions[index]);
+    }
+  });
+
   it('담당자는 자기 동아리만 관리하고, 회차를 만들면 명단이 채워진다', async () => {
     const { club, members } = await clubWith(['나회원', '가회원']);
     const other = await clubWith([]);
@@ -86,6 +116,56 @@ describe('출석부', () => {
     await member.agent.get(`/api/v1/attendance/sessions/${id}`).expect(403);
   });
 
+  it('동아리 QR은 명단·현재 위치·생성 반경·회차를 검증하고 수동 입력을 분리한다', async () => {
+    const { club, members } = await clubWith(['현장회원', '원격회원']);
+    const staff = await signedIn(t, ['staff']);
+    const first = await loginAgent(t, members[0]!.email),
+      second = await loginAgent(t, members[1]!.email);
+    const outsider = await signedIn(t, ['member']);
+    const created = await staff.agent
+      .post('/api/v1/attendance/sessions')
+      .send({ targetType: 'club', targetId: club.id, date: '2026-11-25', title: '현장 확인' })
+      .expect(201);
+    const path = '/api/v1/attendance/sessions/' + created.body.data.id + '/check-in',
+      scan = '/api/v1/me/attendance/scan';
+    const origin = { latitude: 37.55, longitude: 127.0, accuracy: 5, measuredAt: Date.now() };
+    await staff.agent
+      .post(path)
+      .send({ open: true, position: { ...origin, measuredAt: Date.now() - 120000 } })
+      .expect(400);
+    const opened = (await staff.agent.post(path).send({ open: true, position: origin }).expect(200)).body
+      .data;
+    expect(opened.qrTicket).toMatch(/^\d{16}$/);
+    expect(opened).not.toHaveProperty('position');
+    const ticket = opened.qrTicket,
+      code = opened.checkInCode;
+    await first.post(scan).send({ kind: 'club', ticket }).expect(400);
+    await first
+      .post(scan)
+      .send({ kind: 'club', ticket, position: { ...origin, accuracy: 400 } })
+      .expect(400);
+    await first
+      .post(scan)
+      .send({ kind: 'club', ticket, position: { ...origin, latitude: 37.551 } })
+      .expect(400);
+    await first
+      .post(scan)
+      .send({ kind: 'club', ticket, position: { ...origin, measuredAt: Date.now() - 70000 } })
+      .expect(400);
+    await first.post(scan).send({ kind: 'program', code }).expect(400);
+    await outsider.agent.post(scan).send({ kind: 'club', ticket, position: origin }).expect(400);
+    await first
+      .post(scan)
+      .send({ kind: 'club', ticket, position: { ...origin, latitude: 37.55089 } })
+      .expect(200);
+    await second.post('/api/v1/me/attendance/check-in').send({ code }).expect(200);
+    const reopened = (await staff.agent.post(path).send({ open: true, position: origin }).expect(200)).body
+      .data;
+    expect(reopened.qrTicket).not.toEqual(ticket);
+    await first.post(scan).send({ kind: 'club', ticket, position: origin }).expect(400);
+    await staff.agent.post(path).send({ open: false }).expect(200);
+    await first.post(scan).send({ kind: 'club', ticket: reopened.qrTicket, position: origin }).expect(400);
+  });
   it('출석 코드로 본인 출석하고, 다섯 번 틀리면 잠근다', async () => {
     const { club, members } = await clubWith(['코드회원']);
     const staff = await signedIn(t, ['staff']);

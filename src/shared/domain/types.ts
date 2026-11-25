@@ -256,6 +256,7 @@ export interface AttendanceSession {
   date: string;
   title: string;
   /** 본인 출석 체크가 열려 있으면 서버가 발급한 4자리 코드, 아니면 null (담당자에게만 내려온다) */
+  qrTicket?: string | null;
   checkInCode: string | null;
   checkInClosesAt: string | null;
   createdAt: string;
