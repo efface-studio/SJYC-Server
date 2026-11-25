@@ -330,3 +330,26 @@ it('만료되거나 5회 틀린 코드로 가입할 수 없다', async () => {
     .send({ code: valid })
     .expect(400);
 });
+
+it('메일 발송 중지 시 회원 유무와 상관없이 메일 요청만 503을 반환하고 토큰을 만들지 않는다', async () => {
+  const user = await createUser(t);
+  vi.stubEnv('MAIL_DELIVERY', 'disabled');
+  resetEnvCache();
+  try {
+    for (const endpoint of ['password-reset', 'email-verification/resend']) {
+      for (const email of [user.email, uniqueEmail('missing')]) {
+        const result = await t.http
+          .post('/api/v1/auth/' + endpoint)
+          .send({ email })
+          .expect(503);
+        expect(result.body.error.code).toBe('NOT_CONFIGURED');
+      }
+    }
+    expect(await t.prisma.authToken.count({ where: { userId: user.id } })).toBe(0);
+    await t.http.get('/api/v1/health').expect(200);
+    await t.http.get('/api/v1/auth/session').expect(401);
+  } finally {
+    vi.unstubAllEnvs();
+    resetEnvCache();
+  }
+});

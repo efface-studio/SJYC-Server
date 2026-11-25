@@ -5,7 +5,7 @@ import { AppException } from '../common/app-exception';
 import { logger } from '../common/logger';
 import { RateLimitService } from '../common/rate-limit';
 import { env } from '../config/env';
-import { MailService } from '../mail/mail.service';
+import { MailService, requireMailDelivery } from '../mail/mail.service';
 import { PrismaService } from '../prisma/prisma.service';
 import type { LoginInput, SignupInput } from '../shared/domain/schemas';
 import { PhoneSignup } from './phone-signup';
@@ -67,8 +67,7 @@ export class AuthService {
   /** 가입 여부와 관계없이 같은 응답 — 미인증 계정에만 실제로 보낸다 */
   async resendVerification(rawEmail: string): Promise<void> {
     const email = rawEmail.toLowerCase();
-    if (env().SIGNUP_PREVIEW_CODE === 'on' && !env().SMTP_URL)
-      throw new AppException('NOT_CONFIGURED', '이메일 발송이 설정되지 않았습니다.');
+    requireMailDelivery();
     await this.checkVerificationLimit(email);
     const user = await this.prisma.user.findUnique({ where: { email } });
     if (user && !user.emailVerified && user.status === 'active') await this.sendVerification(user.id, email);
@@ -116,6 +115,7 @@ export class AuthService {
 
   /** 가입 여부를 드러내지 않도록 항상 같은 응답 */
   async requestPasswordReset(rawEmail: string): Promise<void> {
+    requireMailDelivery();
     const email = rawEmail.toLowerCase();
     if (await this.limiter.exceeded(`reset:${email}`, 3, 600)) throw new AppException('RATE_LIMITED');
     const user = await this.prisma.user.findUnique({ where: { email } });

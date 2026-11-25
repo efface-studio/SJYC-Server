@@ -1,0 +1,39 @@
+# 실행 환경 파일은 저장소 외부의 접근 제한 디렉터리에 둔다.
+name: sjyc-production
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: sjyc
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+    secrets:
+      - postgres_password
+    ports:
+      - '127.0.0.1:55434:5432'
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD', 'pg_isready', '-U', 'postgres', '-d', 'sjyc']
+      interval: 10s
+      retries: 6
+      timeout: 5s
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ['redis-server', '/run/secrets/redis_config']
+    secrets:
+      - redis_config
+    ports:
+      - '127.0.0.1:56381:6379'
+    volumes:
+      - redisdata:/data
+
+secrets:
+  postgres_password:
+    file: ./postgres.password
+  redis_config:
+    file: ./redis.conf
+volumes:
+  pgdata:
+  redisdata:
