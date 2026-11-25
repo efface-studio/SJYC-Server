@@ -1,3 +1,4 @@
+import { savePhoneTicket } from './phone-signup';
 import { AdminSocial } from './admin-social';
 import { loginSchema, type LoginInput } from '../shared/domain/schemas';
 import { SocialOnboarding, onboardingInput } from './social-onboarding';
@@ -159,17 +160,6 @@ export class SocialController {
   }
 
   @Public()
-  @Post('auth/social/onboarding/email')
-  async email(
-    @Req() req: AuthedRequest,
-    @Body(new ZodPipe(z.object({ email: z.email().max(254) }))) body: { email: string },
-  ) {
-    if (await this.limiter.exceeded('social-email:' + clientIp(req), 20, 600))
-      throw new AppException('RATE_LIMITED');
-    await this.onboarding.requestCode(String(req.cookies?.[this.draftCookie] ?? ''), body.email);
-  }
-
-  @Public()
   @Post('auth/social/onboarding')
   async save(
     @Req() req: AuthedRequest,
@@ -177,10 +167,14 @@ export class SocialController {
     @Body(new ZodPipe(onboardingInput)) input: z.infer<typeof onboardingInput>,
   ) {
     if (req.user) throw new AppException('CONFLICT', '이미 로그인한 계정이 있습니다.');
-    const id = await this.onboarding.complete(String(req.cookies?.[this.draftCookie] ?? ''), input);
+    const { ticket, state } = await this.onboarding.complete(
+      String(req.cookies?.[this.draftCookie] ?? ''),
+      input,
+      clientIp(req),
+    );
     res.clearCookie(this.draftCookie, this.cookieOptions());
-    await this.signIn(id, req, res);
-    return { signedIn: true };
+    savePhoneTicket(res, ticket);
+    return { signedIn: false, requiresPhoneVerification: true, ...state };
   }
 
   @Public()

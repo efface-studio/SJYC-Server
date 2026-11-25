@@ -179,13 +179,14 @@ it('새 소셜 계정은 정보를 확인한 뒤에만 세션을 받으며 입�
     .expect(400);
   await browser
     .post(path)
-    .send({ ...form, email: 'changed@example.org', code: '284600' })
-    .expect(400);
-  await browser
-    .post(path)
     .send({ ...form, agreeTerms: false })
     .expect(400);
   await browser.post(path).send(form).expect(201);
+  await browser.get('/api/v1/auth/session').expect(401);
+  await browser
+    .post('/api/v1/auth/phone-verification/confirm')
+    .send({ code: t.sms.sent.at(-1)!.code })
+    .expect(200);
   const session = await browser.get('/api/v1/auth/session').expect(200);
   expect(session.body.data.user).toMatchObject({ email, name: form.name, phone: form.phone });
   await browser.get(path).expect(400);
@@ -232,12 +233,12 @@ it('Apple 최초 동의 POST를 일회성 GET으로 이어 원래 브라우저�
   expect((await browser.get(cb + url.search)).headers.location).toContain('oauth_expired');
 });
 
-it('인증되지 않은 제공자 이메일을 수정하면 새 주소에 발급된 코드가 필요하다', async () => {
+it('소셜 가입도 선택한 번호로 인증하며 수정한 이메일을 인증됨으로 기록하지 않는다', async () => {
   vi.stubEnv('NAVER_CLIENT_ID', 'test-naver');
-  vi.stubEnv('NAVER_CLIENT_SECRET', 'test-only');
+  vi.stubEnv('NAVER_CLIENT_SECRET', 'test-secret');
   resetEnvCache();
   vi.spyOn(providers, 'providerProfile').mockResolvedValue({
-    subject: 'new-naver-' + Date.now(),
+    subject: 'new-' + Date.now(),
     email: 'old@example.org',
   });
   const browser = supertest.agent(t.app.getHttpServer());
@@ -248,28 +249,29 @@ it('인증되지 않은 제공자 이메일을 수정하면 새 주소에 발급
         new URL(start.headers.location!).searchParams.get('state'),
     )
     .expect(302);
-  const path = '/api/v1/auth/social/onboarding';
-  const email = 'edited-' + Date.now() + '@example.org';
+  const email = 'edited-' + Date.now() + '@example.org',
+    phone = '010-1111-1212';
   await browser
-    .post(path + '/email')
-    .send({ email })
+    .post('/api/v1/auth/social/onboarding')
+    .send({
+      email,
+      name: '변경한이름',
+      birthDate: '2002-04-12',
+      phone,
+      agreeTerms: true,
+      agreePrivacy: true,
+      agreeMarketing: false,
+    })
     .expect(201);
-  const code = t.mail.sent.findLast((m) => m.to === email)?.text.match(/\b\d{6}\b/)?.[0];
-  expect(code).toMatch(/^\d{6}$/);
-  const form = {
-    email,
-    name: '본인이름',
-    birthDate: '2002-04-12',
-    phone: '010-0000-0000',
-    agreeTerms: true,
-    agreePrivacy: true,
-    agreeMarketing: false,
-    code,
-  };
+  expect(t.sms.sent.at(-1)?.phone).toBe(phone);
+  await browser.get('/api/v1/auth/session').expect(401);
   await browser
-    .post(path)
-    .send({ ...form, email: 'different@example.org' })
-    .expect(400);
-  await browser.post(path).send(form).expect(201);
-  expect((await browser.get('/api/v1/auth/session')).body.data.user.email).toBe(email);
+    .post('/api/v1/auth/phone-verification/confirm')
+    .send({ code: t.sms.sent.at(-1)!.code })
+    .expect(200);
+  expect((await browser.get('/api/v1/auth/session')).body.data.user).toMatchObject({
+    email,
+    phone,
+    emailVerified: false,
+  });
 });

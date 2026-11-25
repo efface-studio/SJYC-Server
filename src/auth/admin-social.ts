@@ -45,7 +45,8 @@ export class AdminSocial {
       include: { user: { include } },
     });
     if (
-      linked?.user.emailVerified &&
+      linked &&
+      (linked.user.emailVerified || linked.user.signupPhoneVerifiedAt) &&
       canEnterConsole({ ...linked.user, managedClubIds: linked.user.managedClubs.map((m) => m.clubId) })
     ) {
       await this.signIn(linked.userId, agent, res);
@@ -91,7 +92,7 @@ export class AdminSocial {
         if (
           user.passwordHash !== owner.passwordHash ||
           user.email !== owner.email ||
-          !user.emailVerified ||
+          (!user.emailVerified && !user.signupPhoneVerifiedAt) ||
           !canEnterConsole({ ...user, managedClubIds: user.managedClubs.map((m) => m.clubId) })
         )
           throw denied();

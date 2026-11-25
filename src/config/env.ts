@@ -28,6 +28,9 @@ const schema = z.object({
     .optional()
     .transform((v) => v || undefined),
   /** 비우면 메일을 보내지 않고 로그로 남긴다 (운영은 필수) */
+  SOLAPI_API_KEY: z.string().optional(),
+  SOLAPI_API_SECRET: z.string().optional(),
+  SOLAPI_SENDER: z.string().optional(),
   SMTP_URL: z.string().optional(),
   MAIL_FROM: z.string().default('중구청소년센터 <no-reply@localhost>'),
   SESSION_TTL_HOURS: z.coerce
