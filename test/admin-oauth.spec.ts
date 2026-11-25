@@ -189,3 +189,19 @@ it('관리자 앱에서 기존 직원 계정 연동을 마친 뒤 같은 소셜 
   expect(second.data).toEqual({ signedIn: true, needsLink: false });
   expect((await second.client.get(session).expect(200)).body.data.user.id).toBe(staff.id);
 });
+
+it('관리자 앱 설정에서 연결하면 같은 관리자 세션으로 돌아오며 일반 회원은 관리자 경로를 이용할 수 없다', async () => {
+  const { signedIn } = await import('./fixtures');
+  const admin = await signedIn(t, ['admin']);
+  const member = await signedIn(t);
+  const route = '/api/v1/me/social/kakao/start?app=admin';
+  await member.agent.post(route).expect(403);
+  mockProfile('admin-settings-' + admin.user.id);
+  const start = (await admin.agent.post(route).expect(201)).body.data;
+  const location = new URL((await t.http.get(callback(start.url)).expect(302)).headers.location!);
+  expect(location.protocol + '//' + location.host).toBe('sjyc-admin://account-link-return');
+  const proof = { receipt: location.searchParams.get('receipt'), claim: start.claim };
+  await admin.agent.post('/api/v1/auth/social/complete').send(proof).expect(201);
+  expect((await admin.agent.get('/api/v1/me/social').expect(200)).body.data.linked).toContain('kakao');
+  expect((await member.agent.get('/api/v1/me/social').expect(200)).body.data.linked).not.toContain('kakao');
+});

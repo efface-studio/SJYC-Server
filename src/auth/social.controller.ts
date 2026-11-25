@@ -1,3 +1,4 @@
+import { canEnterConsole } from '../shared/domain/permissions';
 import { savePhoneTicket } from './phone-signup';
 import { AdminSocial } from './admin-social';
 import { loginSchema, type LoginInput } from '../shared/domain/schemas';
@@ -18,6 +19,7 @@ import { SocialService } from './social.service';
 const providerPipe = new ZodPipe(z.enum(OAuthProvider));
 const token = z.string().regex(/^[a-zA-Z0-9_-]{43}$/);
 const adminAppState = z.string().regex(/^adminapp\.[a-zA-Z0-9_-]{43}$/);
+const adminLinkState = z.string().regex(/^adminlink\.[a-zA-Z0-9_-]{43}$/);
 const webState = z.string().regex(/^(?:web|adminweb)\.[a-zA-Z0-9_-]{43}$/);
 const webCookie = z.object({ state: webState, claim: token, next: z.string().max(1500) });
 
@@ -183,7 +185,7 @@ export class SocialController {
     @Body(
       new ZodPipe(
         z.object({
-          state: z.union([webState, token, adminAppState]),
+          state: z.union([webState, token, adminAppState, adminLinkState]),
           code: z.string().max(4096).optional(),
           error: z.string().max(128).optional(),
           user: z.string().max(4096).optional(),
@@ -235,10 +237,16 @@ export class SocialController {
   }
 
   @Post('me/social/:provider/start')
-  async startLink(@Param('provider', providerPipe) provider: OAuthProvider, @Req() req: AuthedRequest) {
+  async startLink(
+    @Param('provider', providerPipe) provider: OAuthProvider,
+    @Req() req: AuthedRequest,
+    @Query('app') app?: string,
+  ) {
     if (await this.limiter.exceeded('social-link:' + req.user!.id, 30, 600))
       throw new AppException('RATE_LIMITED');
-    return this.social.start(provider, req.user!.id);
+    const adminLink = app === 'admin';
+    if (adminLink && !canEnterConsole(req.user)) throw new AppException('FORBIDDEN');
+    return this.social.start(provider, req.user!.id, false, false, adminLink);
   }
 
   private async startWeb(
@@ -364,7 +372,12 @@ export class SocialController {
     const admin =
       typeof query.state === 'string' &&
       (query.state.startsWith('adminweb.') || query.state.startsWith('adminapp.'));
-    const mobileReturn = admin ? 'sjyc-admin://oauth-return' : 'sjyc://oauth-return';
+    const adminLink = adminLinkState.safeParse(query.state).success;
+    const mobileReturn = adminLink
+      ? 'sjyc-admin://account-link-return'
+      : admin
+        ? 'sjyc-admin://oauth-return'
+        : 'sjyc://oauth-return';
     const cookieName = (admin ? 'sjyc_admin_oauth_' : 'sjyc_oauth_') + provider;
     const browser = webCookie.safeParse(req.cookies?.[cookieName]);
     const failed = env().WEB_PUBLIC_URL + (admin ? '/admin/login?error=' : '/login?error=');
@@ -379,7 +392,10 @@ export class SocialController {
       });
     }
     const input = z
-      .object({ state: web ? webState : admin ? adminAppState : token, code: z.string().min(1).max(4096) })
+      .object({
+        state: web ? webState : admin ? adminAppState : adminLink ? adminLinkState : token,
+        code: z.string().min(1).max(4096),
+      })
       .safeParse(query);
     try {
       if (input.success) {

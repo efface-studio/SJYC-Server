@@ -31,7 +31,7 @@ export async function lockProgram(tx: Tx, id: string) {
 }
 
 /** 접수 번호 — DB 시퀀스로 서버가 발급한다 */
-async function nextReceiptNo(tx: Tx): Promise<string> {
+export async function nextReceiptNo(tx: Tx): Promise<string> {
   const [row] = await tx.$queryRaw<{ n: bigint }[]>`SELECT nextval('program_application_receipt_seq') AS n`;
   const year = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Seoul', year: 'numeric' }).format(
     new Date(),
