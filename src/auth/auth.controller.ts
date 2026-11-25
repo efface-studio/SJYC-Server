@@ -1,3 +1,5 @@
+import { SocialController } from './social.controller';
+import { SocialService } from './social.service';
 import { Body, Controller, Get, HttpCode, Module, Param, Post, Query, Req, Res } from '@nestjs/common';
 import type { Request, Response } from 'express';
 import { z } from 'zod';
@@ -110,8 +112,8 @@ export class AuthController {
 }
 
 @Module({
-  controllers: [AuthController],
-  providers: [AuthService, SessionService],
+  controllers: [AuthController, SocialController],
+  providers: [AuthService, SessionService, SocialService],
   exports: [SessionService],
 })
 export class AuthModule {}

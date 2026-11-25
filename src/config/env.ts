@@ -8,6 +8,14 @@ const schema = z.object({
   WEB_ORIGIN: z.string().default('http://localhost:3000'),
   WEB_PUBLIC_URL: z.url().default('http://localhost:3000'),
   API_PUBLIC_URL: z.url().default('http://localhost:4000/api/v1'),
+  KAKAO_CLIENT_ID: z.string().optional(),
+  KAKAO_CLIENT_SECRET: z.string().optional(),
+  NAVER_CLIENT_ID: z.string().optional(),
+  NAVER_CLIENT_SECRET: z.string().optional(),
+  GOOGLE_CLIENT_ID: z.string().optional(),
+  GOOGLE_CLIENT_SECRET: z.string().optional(),
+  APPLE_CLIENT_ID: z.string().optional(),
+  APPLE_CLIENT_SECRET: z.string().optional(),
   COOKIE_DOMAIN: z
     .string()
     .optional()
