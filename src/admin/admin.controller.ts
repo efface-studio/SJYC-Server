@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Module, Param, Patch, Query } from '@nestjs/common';
+import { Body, Controller, Get, Module, Param, Patch, Post, Header, Query } from '@nestjs/common';
 import type { User as UserRow } from '@prisma/client';
 import { z } from 'zod';
 import { AuthModule } from '../auth/auth.controller';
@@ -10,6 +10,8 @@ import { AdminOpsController } from './admin-ops.controller';
 import { AdminOpsService } from './admin-ops.service';
 import { type AdminListQuery, adminListQuery } from './admin-query';
 import { AdminService, type MemberPatch } from './admin.service';
+
+import { MemberActions, memberAction } from './member-actions';
 
 const dashboardQuery = z.object({
   periodDays: z.coerce.number().int().min(1).max(365).catch(7).default(7),
@@ -31,7 +33,10 @@ const memberPatch = z
 
 @Controller('admin')
 export class AdminController {
-  constructor(private readonly admin: AdminService) {}
+  constructor(
+    private readonly admin: AdminService,
+    private readonly memberActions: MemberActions,
+  ) {}
 
   @RequirePermission('admin.access')
   @Get('dashboard')
@@ -61,6 +66,23 @@ export class AdminController {
     return this.admin.updateMember(me, id, patch);
   }
 
+  @RequirePermission('member.manage')
+  @Get('members/:id/activity-options')
+  activityOptions(@CurrentUser() actor: UserRow, @Param('id') id: string) {
+    return this.memberActions.options(actor, id);
+  }
+
+  @RequirePermission('member.manage')
+  @Post('members/:id/actions')
+  @Header('Cache-Control', 'no-store')
+  memberAction(
+    @CurrentUser() actor: UserRow,
+    @Param('id') id: string,
+    @Body(new ZodPipe(memberAction)) command: z.infer<typeof memberAction>,
+  ) {
+    return this.memberActions.execute(actor, id, command);
+  }
+
   @RequirePermission('audit.read')
   @Get('audit-events')
   audit(@Query(new ZodPipe(auditQuery)) q: AdminListQuery) {
@@ -71,7 +93,7 @@ export class AdminController {
 @Module({
   imports: [AuthModule],
   controllers: [AdminController, AdminContentController, AdminOpsController],
-  providers: [AdminService, AdminContentService, AdminOpsService],
+  providers: [MemberActions, AdminService, AdminContentService, AdminOpsService],
   exports: [AdminOpsService],
 })
 export class AdminModule {}

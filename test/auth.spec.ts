@@ -1,3 +1,4 @@
+import { resetEnvCache } from '../src/config/env';
 import supertest from 'supertest';
 import { clearRateLimits, createTestApp, type TestContext } from './app';
 import { createUser, loginAgent, PASSWORD, uniqueEmail } from './fixtures';
@@ -16,46 +17,106 @@ const signupBody = (email: string) => ({
   email,
   password: 'abcd1234',
   passwordConfirm: 'abcd1234',
+  phone: '010-0000-0000',
   birthYear: 2008,
   agreeTerms: 'on',
   agreePrivacy: 'on',
   agreeMarketing: false,
 });
 
-describe('회원가입·이메일 인증', () => {
-  it('가입 → 인증 전 로그인 거부 → 메일 링크 확인 → 로그인', async () => {
-    const email = uniqueEmail('signup');
-    const res = await t.http.post('/api/v1/auth/signup').send(signupBody(email)).expect(201);
-    expect(res.body).toEqual({ success: true, data: { requiresEmailVerification: true } });
-
-    const blocked = await t.http.post('/api/v1/auth/login').send({ email, password: 'abcd1234' }).expect(403);
-    expect(blocked.body.error.message).toContain('이메일 인증');
-
-    const token = t.mail.lastToken(email)!;
-    const confirm = await t.http.get(`/api/v1/auth/email-verification/confirm?token=${token}`).expect(302);
-    expect(confirm.headers.location).toBe('http://localhost:3000/login?verified=1');
-    // 1회용
-    const again = await t.http.get(`/api/v1/auth/email-verification/confirm?token=${token}`).expect(302);
-    expect(again.headers.location).toContain('error=verify_expired');
-
-    const ok = await t.http.post('/api/v1/auth/login').send({ email, password: 'abcd1234' }).expect(200);
-    expect(ok.body.data.user).toMatchObject({
-      email,
-      roles: ['member'],
-      emailVerified: true,
-      managedClubIds: [],
+describe('회원가입·휴대전화 인증', () => {
+  it('문자 확인 전에는 계정과 세션이 없고 완료 후 이메일을 로그인 ID로 쓸 수 있다', async () => {
+    const browser = supertest.agent(t.app.getHttpServer()),
+      form = signupBody(uniqueEmail('sms')),
+      path = '/api/v1/auth/phone-verification';
+    const result = await browser.post('/api/v1/auth/signup').send(form).expect(201);
+    expect(result.body.data).toMatchObject({
+      phone: form.phone,
+      verificationMode: 'sms',
+      requiresPhoneVerification: true,
     });
-    expect(ok.body.data.user.passwordHash).toBeUndefined();
-    const consents = ok.body.data.user.consents as { key: string; agreed: boolean }[];
-    expect(consents.find((c) => c.key === 'marketing')?.agreed).toBe(false);
+    expect(t.mail.lastToken(form.email)).toBeUndefined();
+    expect(await t.prisma.user.findUnique({ where: { email: form.email } })).toBeNull();
+    await browser.get('/api/v1/auth/session').expect(401);
+    const code = t.sms.sent.at(-1)!.code;
+    await t.http
+      .post(path + '/confirm')
+      .send({ code })
+      .expect(400);
+    await browser
+      .post(path + '/confirm')
+      .send({ code })
+      .expect(200);
+    await browser
+      .post(path + '/confirm')
+      .send({ code })
+      .expect(400);
+    const logged = await browser
+      .post('/api/v1/auth/login')
+      .send({ email: form.email, password: form.password })
+      .expect(200);
+    expect(logged.body.data.user).toMatchObject({
+      email: form.email,
+      emailVerified: false,
+      phone: form.phone,
+      roles: ['member'],
+    });
+    expect(logged.body.data.user.passwordHash).toBeUndefined();
+    expect(await t.prisma.user.findUniqueOrThrow({ where: { email: form.email } })).toHaveProperty(
+      'signupPhoneVerifiedAt',
+      expect.any(Date),
+    );
   });
 
   it('중복 이메일은 CONFLICT(EMAIL_TAKEN) 와 필드 오류', async () => {
     const email = uniqueEmail('dup');
-    await t.http.post('/api/v1/auth/signup').send(signupBody(email)).expect(201);
+    await createUser(t, { email });
     const res = await t.http.post('/api/v1/auth/signup').send(signupBody(email.toUpperCase())).expect(409);
     expect(res.body.error).toMatchObject({ code: 'CONFLICT', reason: 'EMAIL_TAKEN' });
     expect(res.body.error.fieldErrors.email).toBeTruthy();
+  });
+
+  it('문자 발송 실패는 가입을 만들지 않으며 재발송 실패 후 이전 코드가 살아 있다', async () => {
+    const form = signupBody(uniqueEmail('send')),
+      agent = supertest.agent(t.app.getHttpServer()),
+      path = '/api/v1/auth/phone-verification';
+    const { AppException } = await import('../src/common/app-exception');
+    vi.spyOn(t.sms, 'send').mockRejectedValueOnce(new AppException('NETWORK'));
+    await agent.post('/api/v1/auth/signup').send(form).expect(503);
+    expect(await t.prisma.user.findUnique({ where: { email: form.email } })).toBeNull();
+    await agent.post('/api/v1/auth/signup').send(form).expect(201);
+    const code = t.sms.sent.at(-1)!.code;
+    await agent
+      .post(path + '/resend')
+      .send({})
+      .expect(429);
+    vi.spyOn(t.sms, 'send').mockRejectedValueOnce(new AppException('NETWORK'));
+    await agent
+      .post(path + '/resend')
+      .send({ phone: '010-1234-1001' })
+      .expect(503);
+    expect((await agent.get(path)).body.data.phone).toBe(form.phone);
+    await agent
+      .post(path + '/confirm')
+      .send({ code })
+      .expect(200);
+  });
+  it('휴대전화가 누락되거나 올바르지 않으면 회원을 저장하지 않는다', async () => {
+    const email = uniqueEmail('phone');
+    const bad = await t.http
+      .post('/api/v1/auth/signup')
+      .send({ ...signupBody(email), phone: '123' })
+      .expect(400);
+    expect(bad.body.error.fieldErrors.phone).toBeTruthy();
+    await t.http
+      .post('/api/v1/auth/signup')
+      .send({ ...signupBody(email), phone: '' })
+      .expect(400);
+    await t.http
+      .post('/api/v1/auth/signup')
+      .send({ ...signupBody(email), phone: undefined })
+      .expect(400);
+    expect(await t.prisma.user.findUnique({ where: { email } })).toBeNull();
   });
 
   it('웹 폼과 같은 규칙으로 검증한다 (비밀번호 확인·필수 동의)', async () => {
@@ -167,4 +228,105 @@ describe('소셜 로그인', () => {
     const res = await t.http.get('/api/v1/auth/oauth/kakao/start?redirect=%2Fmy').expect(302);
     expect(res.headers.location).toBe('http://localhost:3000/login?error=oauth_failed');
   });
+});
+
+it('로컬 가입 고정 코드는 가입을 시작한 기기에서만 한 번 사용할 수 있고 실메일을 보내지 않는다', async () => {
+  vi.stubEnv('SIGNUP_PREVIEW_CODE', 'on');
+  resetEnvCache();
+  try {
+    const browser = supertest.agent(t.app.getHttpServer());
+    const email = uniqueEmail('preview');
+    const form = signupBody(email);
+    await browser
+      .post('/api/v1/auth/signup')
+      .send({ ...form, phone: '' })
+      .expect(400);
+    const start = await browser.post('/api/v1/auth/signup').send(form).expect(201);
+    expect(start.body.data.verificationMode).toBe('preview');
+    expect(t.mail.lastToken(email)).toBeUndefined();
+    const route = '/api/v1/auth/phone-verification/confirm';
+    await t.http.post(route).send({ code: '284600' }).expect(400);
+    await browser.post(route).send({ code: '123456' }).expect(400);
+    await browser.post(route).send({ code: '284600' }).expect(200);
+    await browser.post(route).send({ code: '284600' }).expect(400);
+    await browser.post('/api/v1/auth/login').send({ email, password: form.password }).expect(200);
+  } finally {
+    vi.unstubAllEnvs();
+    resetEnvCache();
+  }
+});
+
+it('재발송은 코드를 교체하고 번호 변경은 이전 기기 증명까지 무효화한다', async () => {
+  const form = signupBody(uniqueEmail('change')),
+    agent = supertest.agent(t.app.getHttpServer()),
+    path = '/api/v1/auth/phone-verification';
+  const first = await agent.post('/api/v1/auth/signup').send(form).expect(201);
+  const oldCookie = (first.headers['set-cookie'] as unknown as string[])
+    .find((s) => s.startsWith('sjyc_signup_phone='))!
+    .split(';')[0]!;
+  const old = t.sms.sent.at(-1)!.code;
+  const hash = (await import('../src/auth/tokens')).hashToken(oldCookie.split('=')[1]!);
+  await t.prisma.signupPhoneChallenge.update({
+    where: { ticketHash: hash },
+    data: { sentAt: new Date(Date.now() - 31000) },
+  });
+  await agent
+    .post(path + '/resend')
+    .send({})
+    .expect(200);
+  await t.http.get(path).set('Cookie', oldCookie).expect(400);
+  const sameNumberCode = t.sms.sent.at(-1)!.code;
+  const phone = '010-1111-1010';
+  await agent
+    .post(path + '/resend')
+    .send({ phone })
+    .expect(200);
+  const next = t.sms.sent.at(-1)!;
+  expect(next.phone).toBe(phone);
+  if (old !== next.code)
+    await agent
+      .post(path + '/confirm')
+      .send({ code: old })
+      .expect(400);
+  if (sameNumberCode !== next.code)
+    await agent
+      .post(path + '/confirm')
+      .send({ code: sameNumberCode })
+      .expect(400);
+  await agent
+    .post(path + '/confirm')
+    .send({ code: next.code })
+    .expect(200);
+  expect((await t.prisma.user.findUniqueOrThrow({ where: { email: form.email } })).phone).toBe(phone);
+});
+it('만료되거나 5회 틀린 코드로 가입할 수 없다', async () => {
+  const path = '/api/v1/auth/phone-verification',
+    agent = supertest.agent(t.app.getHttpServer());
+  const start = await agent
+    .post('/api/v1/auth/signup')
+    .send(signupBody(uniqueEmail('expire')))
+    .expect(201);
+  const valid = t.sms.sent.at(-1)!.code,
+    wrong = valid === '000000' ? '000001' : '000000';
+  for (let i = 0; i < 5; i++)
+    await agent
+      .post(path + '/confirm')
+      .send({ code: wrong })
+      .expect(400);
+  await agent
+    .post(path + '/confirm')
+    .send({ code: valid })
+    .expect(429);
+  const tok = (start.headers['set-cookie'] as unknown as string[])
+    .find((s) => s.startsWith('sjyc_signup_phone='))!
+    .split(';')[0]!
+    .split('=')[1]!;
+  await t.prisma.signupPhoneChallenge.update({
+    where: { ticketHash: (await import('../src/auth/tokens')).hashToken(tok) },
+    data: { codeExpiresAt: new Date(Date.now() - 100), attempts: 0 },
+  });
+  await agent
+    .post(path + '/confirm')
+    .send({ code: valid })
+    .expect(400);
 });

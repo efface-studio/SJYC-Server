@@ -50,6 +50,41 @@ export class SessionService {
     return { user, expiresAt, renewed: true };
   }
 
+  async devices(userId: string, currentToken: string) {
+    const now = new Date();
+    const current = hashToken(currentToken);
+    const rows = await this.prisma.session.findMany({
+      where: { userId, expiresAt: { gt: now } },
+      orderBy: { createdAt: 'desc' },
+      select: { id: true, tokenHash: true, userAgent: true, createdAt: true, expiresAt: true },
+    });
+    return rows.map(({ id, tokenHash, userAgent, createdAt, expiresAt }) => {
+      const agent = userAgent ?? '';
+      const label = /iPhone|iPad|CFNetwork|Darwin/i.test(agent)
+        ? 'Apple 기기'
+        : /Android|okhttp/i.test(agent)
+          ? 'Android 기기'
+          : /Macintosh/i.test(agent)
+            ? 'Mac'
+            : /Windows/i.test(agent)
+              ? 'Windows'
+              : '로그인 기기';
+      return {
+        id,
+        label,
+        current: tokenHash === current,
+        createdAt: createdAt.toISOString(),
+        expiresAt: expiresAt.toISOString(),
+      };
+    });
+  }
+
+  async revokeDevice(userId: string, id: string, currentToken: string) {
+    await this.prisma.session.deleteMany({
+      where: { userId, id, tokenHash: { not: hashToken(currentToken) } },
+    });
+  }
+
   async revoke(token: string): Promise<void> {
     await this.prisma.session.deleteMany({ where: { tokenHash: hashToken(token) } });
   }

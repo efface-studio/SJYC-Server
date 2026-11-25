@@ -2,17 +2,37 @@ import { z } from 'zod';
 
 const schema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
+  SIGNUP_PREVIEW_CODE: z.enum(['off', 'on']).default('off'),
   PORT: z.coerce.number().int().positive().default(4000),
   DATABASE_URL: z.string().min(1),
   REDIS_URL: z.string().min(1),
   WEB_ORIGIN: z.string().default('http://localhost:3000'),
   WEB_PUBLIC_URL: z.url().default('http://localhost:3000'),
   API_PUBLIC_URL: z.url().default('http://localhost:4000/api/v1'),
+  KAKAO_CLIENT_ID: z.string().optional(),
+  KAKAO_CLIENT_SECRET: z.string().optional(),
+  NAVER_CLIENT_ID: z.string().optional(),
+  NAVER_CLIENT_SECRET: z.string().optional(),
+  GOOGLE_CLIENT_ID: z.string().optional(),
+  GOOGLE_CLIENT_SECRET: z.string().optional(),
+  APPLE_CLIENT_ID: z.string().optional(),
+  APPLE_CLIENT_SECRET: z.string().optional(),
+  APPLE_WEB_LOGIN_ENABLED: z.enum(['on', 'off']).default('off'),
+  APPLE_IOS_LOGIN_ENABLED: z.enum(['on', 'off']).default('off'),
+  APPLE_IOS_BUNDLE_ID: z.string().optional(),
+  APPLE_TEAM_ID: z.string().optional(),
+  APPLE_KEY_ID: z.string().optional(),
+  APPLE_PRIVATE_KEY: z.string().optional(),
   COOKIE_DOMAIN: z
     .string()
     .optional()
     .transform((v) => v || undefined),
   /** 비우면 메일을 보내지 않고 로그로 남긴다 (운영은 필수) */
+  SOLAPI_API_KEY: z.string().optional(),
+  SOLAPI_API_SECRET: z.string().optional(),
+  SOLAPI_SENDER: z.string().optional(),
+  OTA_ROLLBACK_KEY_FILE: z.string().startsWith('/').optional(),
+  OTA_DIRECTORY: z.string().startsWith('/').optional(),
   SMTP_URL: z.string().optional(),
   MAIL_FROM: z.string().default('중구청소년센터 <no-reply@localhost>'),
   SESSION_TTL_HOURS: z.coerce
@@ -38,6 +58,8 @@ export function env(): Env {
   if (parsed.data.NODE_ENV === 'production' && !parsed.data.SMTP_URL) {
     throw new Error('환경 변수가 올바르지 않습니다 — 운영에서는 SMTP_URL 이 필요합니다 (인증·재설정 메일)');
   }
+  if (parsed.data.NODE_ENV === 'production' && parsed.data.SIGNUP_PREVIEW_CODE === 'on')
+    throw new Error('운영 환경에서는 고정 가입 코드를 사용할 수 없습니다.');
   cached = parsed.data;
   return cached;
 }

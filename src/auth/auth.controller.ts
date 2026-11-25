@@ -1,4 +1,11 @@
-import { Body, Controller, Get, HttpCode, Module, Param, Post, Query, Req, Res } from '@nestjs/common';
+import { PhoneSignup, phoneCookie, savePhoneTicket, clearPhoneTicket } from './phone-signup';
+import { SignupSms } from './signup-sms';
+import { profileSchema } from '../shared/domain/schemas';
+import { AdminSocial } from './admin-social';
+import { SocialOnboarding } from './social-onboarding';
+import { SocialController } from './social.controller';
+import { SocialService } from './social.service';
+import { Body, Controller, Get, HttpCode, Module, Post, Query, Req, Res } from '@nestjs/common';
 import type { Request, Response } from 'express';
 import { z } from 'zod';
 import { AppException } from '../common/app-exception';
@@ -20,12 +27,12 @@ import { AuthService } from './auth.service';
 import { SessionService } from './session.service';
 
 const resetConfirmSchema = z.object({ token: z.string().min(1).max(200), password: z.string() });
-const OAUTH_PROVIDERS = new Set(['kakao', 'naver', 'apple', 'google']);
 
 @Controller('auth')
 export class AuthController {
   constructor(
     private readonly auth: AuthService,
+    private readonly phone: PhoneSignup,
     private readonly sessions: SessionService,
   ) {}
 
@@ -60,8 +67,53 @@ export class AuthController {
 
   @Public()
   @Post('signup')
-  signup(@Body(new ZodPipe(apiInput(signupSchema))) input: SignupInput, @Req() req: Request) {
-    return this.auth.signup(input, clientIp(req));
+  async signup(
+    @Body(new ZodPipe(apiInput(signupSchema))) input: SignupInput,
+    @Req() req: Request,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    const { ticket, state } = await this.auth.signup(input, clientIp(req));
+    savePhoneTicket(res, ticket);
+    return { requiresPhoneVerification: true, ...state };
+  }
+
+  @Public()
+  @Get('phone-verification')
+  async phoneState(@Req() req: Request, @Res({ passthrough: true }) res: Response) {
+    res.set('Cache-Control', 'no-store');
+    return this.phone.view(String(req.cookies?.[phoneCookie] ?? ''));
+  }
+  @Public()
+  @Post('phone-verification/resend')
+  @HttpCode(200)
+  async resendPhone(
+    @Body(new ZodPipe(z.object({ phone: profileSchema.shape.phone.optional() }))) body: { phone?: string },
+    @Req() req: Request,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    const { ticket, state } = await this.phone.resend(
+      String(req.cookies?.[phoneCookie] ?? ''),
+      body.phone,
+      clientIp(req),
+    );
+    savePhoneTicket(res, ticket);
+    return state;
+  }
+  @Public()
+  @Post('phone-verification/confirm')
+  @HttpCode(200)
+  async confirmPhone(
+    @Body(new ZodPipe(z.object({ code: z.string().regex(/^\d{6}$/) }))) body: { code: string },
+    @Req() req: Request,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    const result = await this.phone.confirm(String(req.cookies?.[phoneCookie] ?? ''), body.code);
+    clearPhoneTicket(res);
+    if (result.social) {
+      const session = await this.sessions.create(result.userId, req.get('user-agent'));
+      this.sessions.setCookie(res, session.token, session.expiresAt);
+    }
+    return { signedIn: result.social };
   }
 
   @Public()
@@ -96,22 +148,19 @@ export class AuthController {
     new ZodPipe(resetPasswordSchema).transform({ password: body.password, passwordConfirm: body.password });
     await this.auth.resetPassword(body.token, body.password);
   }
-
-  /**
-   * 소셜 로그인 시작. 공급자 키가 발급되기 전에는 웹 로그인 화면으로 안내한다
-   * (인가 요청·state·PKCE·토큰 교환은 키 발급 후 이 경로에서 서버가 처리한다).
-   */
-  @Public()
-  @Get('oauth/:provider/start')
-  oauthStart(@Param('provider') provider: string, @Res() res: Response): void {
-    if (!OAUTH_PROVIDERS.has(provider)) throw new AppException('NOT_FOUND');
-    res.redirect(`${env().WEB_PUBLIC_URL}/login?error=oauth_failed`);
-  }
 }
 
 @Module({
-  controllers: [AuthController],
-  providers: [AuthService, SessionService],
+  controllers: [AuthController, SocialController],
+  providers: [
+    AuthService,
+    SessionService,
+    SocialService,
+    SocialOnboarding,
+    AdminSocial,
+    PhoneSignup,
+    SignupSms,
+  ],
   exports: [SessionService],
 })
 export class AuthModule {}

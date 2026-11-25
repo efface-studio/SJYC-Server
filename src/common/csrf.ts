@@ -29,6 +29,13 @@ export function csrf(req: Request, res: Response, next: NextFunction) {
   if (!UNSAFE.has(req.method)) return next();
   const origin = req.headers.origin;
   if (!origin) return next();
+  // Apple posts an authorization response here. The same-site GET still verifies the saved browser state.
+  if (
+    req.method === 'POST' &&
+    req.path === '/api/v1/auth/social/apple/callback' &&
+    origin === 'https://appleid.apple.com'
+  )
+    return next();
   const cookie = req.cookies?.[XSRF_COOKIE] as string | undefined;
   const header = req.get(XSRF_HEADER);
   if (webOrigins().includes(origin) && cookie && header && same(cookie, header)) return next();

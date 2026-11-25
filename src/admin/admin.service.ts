@@ -1,7 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import type { Prisma, Role, User as UserRow, UserStatus } from '@prisma/client';
 import { AuditService, toAuditEvent } from '../audit/audit.service';
-import { SessionService } from '../auth/session.service';
 import { AppException } from '../common/app-exception';
 import { pageArgs, toPage } from '../common/pagination';
 import { toNotice } from '../content/content.mapper';
@@ -26,7 +25,6 @@ export class AdminService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
-    private readonly sessions: SessionService,
   ) {}
 
   async dashboard(periodDays: number): Promise<DashboardSummary> {
@@ -118,29 +116,37 @@ export class AdminService {
         reason: 'INVALID_STATE',
       });
     }
-    const target = await this.prisma.user.findUnique({ where: { id } });
-    if (!target) throw new AppException('NOT_FOUND');
-    if (!canManageUser(actor, target)) {
-      throw new AppException('FORBIDDEN', '개발자 계정은 개발자만 변경할 수 있습니다.');
-    }
-    if (patch.roles) {
-      const allowed = assignableRoles(actor);
-      if (patch.roles.some((r) => !allowed.includes(r))) {
-        throw new AppException('FORBIDDEN', '부여할 수 없는 역할입니다.');
-      }
-    }
     const changes = [
       patch.roles && `역할 ${patch.roles.map((r) => ROLE_LABEL[r]).join(',')}`,
       patch.status && `상태 ${patch.status}`,
     ].filter(Boolean);
     await this.prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT id FROM "User" WHERE id = ${id} FOR UPDATE`;
+      const target = await tx.user.findUnique({ where: { id } });
+      if (!target) throw new AppException('NOT_FOUND');
+      if (target.status === 'withdrawn') throw new AppException('CONFLICT', '이미 탈퇴한 회원입니다.');
+      if (!canManageUser(actor, target)) {
+        throw new AppException('FORBIDDEN', '개발자 계정은 개발자만 변경할 수 있습니다.');
+      }
+      if (patch.roles) {
+        const allowed = assignableRoles(actor);
+        if (patch.roles.some((r) => !allowed.includes(r))) {
+          throw new AppException('FORBIDDEN', '부여할 수 없는 역할입니다.');
+        }
+      }
+
       const u = await tx.user.update({
-        where: { id },
+        where: { id, status: { not: 'withdrawn' } },
         data: {
           ...(patch.roles ? { roles: [...new Set(patch.roles)] } : {}),
           ...(patch.status ? { status: patch.status } : {}),
         },
       });
+      if (patch.status && patch.status !== 'active') await tx.session.deleteMany({ where: { userId: id } });
+      if (patch.status === 'withdrawn') {
+        await tx.authToken.deleteMany({ where: { userId: id } });
+        await tx.userProfilePhoto.deleteMany({ where: { userId: id } });
+      }
       await this.audit.record(
         actor,
         {
@@ -152,8 +158,7 @@ export class AdminService {
         tx,
       );
     });
-    // 정지·탈퇴는 즉시 로그아웃 — 남은 세션으로 계속 쓰지 못하게
-    if (patch.status && patch.status !== 'active') await this.sessions.revokeAll(id);
+
     return this.member(id);
   }
 

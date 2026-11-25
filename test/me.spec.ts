@@ -1,3 +1,5 @@
+import { NotificationsService } from '../src/notifications/notifications.service';
+import sharp from 'sharp';
 import { clearRateLimits, createTestApp, type TestContext } from './app';
 import { createUser, loginAgent, PASSWORD, signedIn } from './fixtures';
 
@@ -17,6 +19,25 @@ describe('내 정보', () => {
       .send({ name: '이름', phone: '', agreeMarketing: false });
     expect(res.status).toBe(401);
     expect(res.body.error.code).toBe('UNAUTHENTICATED');
+  });
+
+  it('본인의 프로필 사진을 저장하고 기본 이미지로 복원한다', async () => {
+    const { agent } = await signedIn(t);
+    const other = await signedIn(t);
+    const path = '/api/v1/me/profile/photo';
+    await t.http.get(path).expect(401);
+    const jpg = await sharp({ create: { width: 40, height: 20, channels: 3, background: 'red' } })
+      .jpeg()
+      .toBuffer();
+    const { body } = await agent
+      .put(path)
+      .send({ image: 'data:image/jpeg;base64,' + jpg.toString('base64') })
+      .expect(200);
+    expect((await agent.get(path)).body.data).toEqual(body.data);
+    expect((await other.agent.get(path)).body.data.image).toBeNull();
+    await agent.put(path).send({ image: 'data:image/jpeg;base64,YWJj' }).expect(400);
+    await agent.put(path).send({ image: null }).expect(200);
+    expect((await agent.get(path)).body.data.image).toBeNull();
   });
 
   it('이름·연락처·마케팅 동의를 바꾸면 동의 시각이 기록된다', async () => {
@@ -49,6 +70,35 @@ describe('내 정보', () => {
 });
 
 describe('알림', () => {
+  it('선택한 유형과 회원에게만 적용하고, 기존 알림을 보존하고, 다시 켜면 생성한다', async () => {
+    const { user, agent } = await signedIn(t);
+    const other = await signedIn(t);
+    const path = '/api/v1/me/notifications/preferences';
+    const service = t.app.get(NotificationsService);
+    const input = {
+      userId: user.id,
+      kind: 'reservation' as const,
+      title: '예약',
+      body: '처리 결과',
+      link: '/my',
+    };
+    await t.http.get(path).expect(401);
+    expect((await agent.get(path)).body.data.muted).toEqual([]);
+    await service.notify(input);
+    await agent.patch(path).send({ kind: 'reservation', enabled: false }).expect(200);
+    await agent.patch(path).send({ kind: 'reservation', enabled: false }).expect(200);
+    await service.notify(input);
+    await service.notify({ ...input, kind: 'application' });
+    await service.notify({ ...input, userId: other.user.id });
+    expect((await service.list(user.id)).map((n) => n.kind).sort()).toEqual(['application', 'reservation']);
+    expect((await other.agent.get(path)).body.data.muted).toEqual([]);
+    expect(await service.list(other.user.id)).toHaveLength(1);
+    await agent.patch(path).send({ kind: 'reservation', enabled: true }).expect(200);
+    await service.notify(input);
+    expect(await service.list(user.id)).toHaveLength(3);
+    await agent.patch(path).send({ kind: 'unknown', enabled: true }).expect(400);
+  });
+
   it('본인 알림만 최신순으로 보고, 지정·전체 읽음 처리한다', async () => {
     const { user, agent } = await signedIn(t);
     const other = await createUser(t);
