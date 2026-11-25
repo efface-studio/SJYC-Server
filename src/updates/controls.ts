@@ -101,7 +101,7 @@ export class ReleaseControls {
             kind: 'UPDATE',
             status: 'ACTIVE',
             rolloutPercent: 100,
-            assetCount,
+            assetCount: assetCount ?? 0,
             live: false,
           } satisfies ReleaseRow;
         }),
