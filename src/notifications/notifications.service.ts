@@ -28,6 +28,12 @@ export class NotificationsService {
   constructor(private readonly prisma: PrismaService) {}
 
   async notify(input: NotifyInput, tx: Tx = this.prisma): Promise<void> {
+    if (
+      await tx.mutedNotification.findUnique({
+        where: { userId_kind: { userId: input.userId, kind: input.kind } },
+      })
+    )
+      return;
     await tx.notification.create({ data: input });
   }
 

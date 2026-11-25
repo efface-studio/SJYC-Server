@@ -1,6 +1,6 @@
 import { Body, Controller, Delete, Get, HttpCode, Module, Patch, Post, Put, Res } from '@nestjs/common';
 import type { User as UserRow } from '@prisma/client';
-import { Prisma } from '@prisma/client';
+import { NotificationKind, Prisma } from '@prisma/client';
 import type { Response } from 'express';
 import { z } from 'zod';
 import { SessionService } from '../auth/session.service';
@@ -14,6 +14,8 @@ import type { ConsentRecord, Notification, User } from '../shared/domain/types';
 import { toUser } from '../users/user.mapper';
 
 import { normalizePhoto, photoInput } from './profile-photo';
+
+const preferenceInput = z.object({ kind: z.enum(NotificationKind), enabled: z.boolean() });
 
 const readSchema = z.object({ ids: z.array(z.string().max(64)).max(200).optional() });
 
@@ -88,6 +90,26 @@ export class MeController {
     ]);
     await this.sessions.revokeAll(me.id);
     this.sessions.clearCookie(res);
+  }
+
+  @Get('notifications/preferences')
+  async notificationPreferences(@CurrentUser() me: UserRow) {
+    const muted = await this.prisma.mutedNotification.findMany({
+      where: { userId: me.id },
+      select: { kind: true },
+    });
+    return { muted: muted.map((row) => row.kind) };
+  }
+
+  @Patch('notifications/preferences')
+  async updatePreference(
+    @CurrentUser() me: UserRow,
+    @Body(new ZodPipe(preferenceInput)) input: z.infer<typeof preferenceInput>,
+  ) {
+    const key = { userId: me.id, kind: input.kind };
+    if (input.enabled) await this.prisma.mutedNotification.deleteMany({ where: key });
+    else await this.prisma.mutedNotification.createMany({ data: [key], skipDuplicates: true });
+    return this.notificationPreferences(me);
   }
 
   @Get('notifications')
