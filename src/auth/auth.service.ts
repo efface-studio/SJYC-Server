@@ -158,7 +158,7 @@ export class AuthService {
     return true;
   }
 
-  async login(input: LoginInput, ip: string, userAgent?: string) {
+  async verifyLogin(input: LoginInput, ip: string) {
     const email = input.email.toLowerCase();
     const key = `login:${ip}:${email}`;
     if (await this.limiter.exceeded(key, 10, 900)) {
@@ -176,6 +176,11 @@ export class AuthService {
       throw new AppException('FORBIDDEN', '이메일 인증을 완료한 뒤 로그인할 수 있습니다.');
     }
     await this.limiter.reset(key);
+    return user;
+  }
+
+  async login(input: LoginInput, ip: string, userAgent?: string) {
+    const user = await this.verifyLogin(input, ip);
     const session = await this.sessions.create(user.id, userAgent);
     const managed = await this.prisma.clubManager.findMany({
       where: { userId: user.id },
