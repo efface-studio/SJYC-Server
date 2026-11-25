@@ -31,6 +31,8 @@ const schema = z.object({
   SOLAPI_API_KEY: z.string().optional(),
   SOLAPI_API_SECRET: z.string().optional(),
   SOLAPI_SENDER: z.string().optional(),
+  OTA_ROLLBACK_KEY_FILE: z.string().startsWith('/').optional(),
+  OTA_DIRECTORY: z.string().startsWith('/').optional(),
   SMTP_URL: z.string().optional(),
   MAIL_FROM: z.string().default('중구청소년센터 <no-reply@localhost>'),
   SESSION_TTL_HOURS: z.coerce
