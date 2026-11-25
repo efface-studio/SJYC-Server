@@ -19,6 +19,8 @@ export type AuthedRequest = Request & {
 };
 
 export const OpenActivity = (activity: Activity) => SetMetadata('center:activity', activity);
+const REMEMBER_DEVICE = 'auth:remember-device';
+export const RememberDevice = () => SetMetadata(REMEMBER_DEVICE, true);
 const PUBLIC = 'auth:public';
 const PERMISSION = 'auth:permission';
 
@@ -47,11 +49,12 @@ export class AuthGuard implements CanActivate {
     const req = ctx.switchToHttp().getRequest<AuthedRequest>();
     const token = req.cookies?.[SESSION_COOKIE] as string | undefined;
     if (token) {
-      const s = await this.sessions.resolve(token);
+      const remember = this.reflector.get<boolean>(REMEMBER_DEVICE, ctx.getHandler()) === true;
+      const s = await this.sessions.resolve(token, remember);
       if (s) {
         req.user = s.user;
         req.session = { token, expiresAt: s.expiresAt };
-        if (s.renewed)
+        if (s.renewed || remember)
           this.sessions.setCookie(ctx.switchToHttp().getResponse<Response>(), token, s.expiresAt);
       }
     }

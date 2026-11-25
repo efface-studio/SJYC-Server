@@ -25,8 +25,8 @@ export interface ResolvedSession {
 export class SessionService {
   constructor(private readonly prisma: PrismaService) {}
 
-  private ttlMs() {
-    return env().SESSION_TTL_HOURS * 3_600_000;
+  private ttlMs(remembered = false) {
+    return (remembered ? 30 * 24 : env().SESSION_TTL_HOURS) * 3_600_000;
   }
 
   async create(userId: string, userAgent?: string): Promise<{ token: string; expiresAt: Date }> {
@@ -39,7 +39,7 @@ export class SessionService {
   }
 
   /** 유효한 세션이면 회원을 돌려준다. 활동 중인 회원만, 절반 이상 지났으면 만료를 연장한다 */
-  async resolve(token: string): Promise<ResolvedSession | null> {
+  async resolve(token: string, remember = false): Promise<ResolvedSession | null> {
     const s = await this.prisma.session.findUnique({
       where: { tokenHash: hashToken(token) },
       include: { user: { include: { managedClubs: { select: { clubId: true } } } } },
@@ -58,11 +58,20 @@ export class SessionService {
       permissionScope: await staffScope(this.prisma, row.id, row.roles),
       managedClubIds: managedClubs.map((m) => m.clubId),
     };
-    if (s.expiresAt.getTime() - Date.now() >= this.ttlMs() / 2) {
+    const remembered = s.remembered || remember;
+    const ttl = this.ttlMs(remembered);
+    if (remembered === s.remembered && s.expiresAt.getTime() - Date.now() >= ttl / 2) {
       return { user, expiresAt: s.expiresAt, renewed: false };
     }
-    const expiresAt = new Date(Date.now() + this.ttlMs());
-    await this.prisma.session.update({ where: { id: s.id }, data: { expiresAt } });
+    const now = new Date();
+    if (s.expiresAt <= now) return null;
+    const expiresAt = new Date(now.getTime() + ttl);
+    const updated = await this.prisma.session.updateMany({
+      where: { id: s.id, expiresAt: s.expiresAt, remembered: s.remembered },
+      data: { expiresAt, remembered },
+    });
+    // 다른 요청이 먼저 갱신하거나 로그아웃한 경우 DB의 최신 상태를 따른다.
+    if (!updated.count) return this.resolve(token, remember);
     return { user, expiresAt, renewed: true };
   }
 

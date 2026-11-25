@@ -172,6 +172,32 @@ describe('로그인·세션', () => {
     expect(res.body.error.code).toBe('RATE_LIMITED');
   });
 
+  it('로그인 유지는 선택한 기기만 30일로 연장하고, 재요청·로그아웃·만료를 처리한다', async () => {
+    const user = await createUser(t);
+    const device = await loginAgent(t, user.email);
+    const other = await loginAgent(t, user.email);
+    const path = '/api/v1/auth/session/remember';
+    const day = 86400000;
+    const renew = await device.post(path).expect(200);
+    const expiry = Date.parse(renew.body.data.expiresAt);
+    expect(expiry - Date.now()).toBeGreaterThan(29 * day);
+    expect(expiry - Date.now()).toBeLessThanOrEqual(30 * day);
+    expect(String(renew.headers['set-cookie'])).toMatch(/sjyc_session=.*HttpOnly/);
+    expect((await device.post(path).expect(200)).body.data.expiresAt).toBe(renew.body.data.expiresAt);
+    expect(Date.parse((await other.get('/api/v1/auth/session')).body.data.expiresAt)).toBeLessThan(expiry);
+    await t.prisma.session.updateMany({
+      where: { userId: user.id, remembered: true },
+      data: { expiresAt: new Date(Date.now() + day) },
+    });
+    expect(
+      Date.parse((await device.get('/api/v1/auth/session')).body.data.expiresAt) - Date.now(),
+    ).toBeGreaterThan(29 * day);
+    await device.post('/api/v1/auth/logout').expect(204);
+    await device.post(path).expect(401);
+    await t.prisma.session.updateMany({ where: { userId: user.id }, data: { expiresAt: new Date(0) } });
+    await other.post(path).expect(401);
+  });
+
   it('만료된 세션과 정지된 회원의 세션은 무효', async () => {
     const user = await createUser(t);
     const agent = await loginAgent(t, user.email);
