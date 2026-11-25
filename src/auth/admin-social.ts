@@ -7,6 +7,7 @@ import { RedisService } from '../redis/redis.service';
 import { canEnterConsole } from '../shared/domain/permissions';
 import type { LoginInput } from '../shared/domain/schemas';
 import { AuthService } from './auth.service';
+import { defersOperatorContact, hasVerifiedContact } from './operator-login';
 import { SessionService } from './session.service';
 import { randomToken, hashToken } from './tokens';
 import { env, isProd } from '../config/env';
@@ -46,10 +47,10 @@ export class AdminSocial {
     });
     if (
       linked &&
-      (linked.user.emailVerified || linked.user.signupPhoneVerifiedAt) &&
+      (hasVerifiedContact(linked.user) || defersOperatorContact(linked.user)) &&
       canEnterConsole({ ...linked.user, managedClubIds: linked.user.managedClubs.map((m) => m.clubId) })
     ) {
-      await this.signIn(linked.userId, agent, res);
+      await this.signIn(linked.userId, agent, res, defersOperatorContact(linked.user));
       return { signedIn: true, needsLink: false };
     }
     const token = randomToken();
@@ -85,14 +86,14 @@ export class AdminSocial {
     )
       throw new AppException('RATE_LIMITED');
     const owner = await this.auth.verifyLogin(input, ip);
-    await this.db
+    const operatorLogin = await this.db
       .$transaction(async (tx) => {
         await tx.$queryRaw`SELECT "id" FROM "User" WHERE "id" = ${owner.id} FOR UPDATE`;
         const user = await tx.user.findUniqueOrThrow({ where: { id: owner.id }, include });
         if (
           user.passwordHash !== owner.passwordHash ||
           user.email !== owner.email ||
-          (!user.emailVerified && !user.signupPhoneVerifiedAt) ||
+          (!hasVerifiedContact(user) && !defersOperatorContact(user)) ||
           !canEnterConsole({ ...user, managedClubIds: user.managedClubs.map((m) => m.clubId) })
         )
           throw denied();
@@ -114,18 +115,19 @@ export class AdminSocial {
             summary: '관리자 소셜 계정 연결 · ' + identity.provider,
           },
         });
+        return defersOperatorContact(user);
       })
       .catch((error: unknown) => {
         if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') throw denied();
         throw error;
       });
     res.clearCookie(cookie, options());
-    await this.signIn(owner.id, agent, res);
+    await this.signIn(owner.id, agent, res, operatorLogin);
     return { signedIn: true };
   }
 
-  private async signIn(id: string, agent: string | undefined, res: Response) {
-    const session = await this.sessions.create(id, agent);
+  private async signIn(id: string, agent: string | undefined, res: Response, operatorLogin: boolean) {
+    const session = await this.sessions.create(id, agent, operatorLogin);
     this.sessions.setCookie(res, session.token, session.expiresAt);
   }
 }

@@ -72,9 +72,17 @@ describe('회원 관리', () => {
     await agent.patch(`/api/v1/admin/members/${target.id}`).send({ roles: [] }).expect(400);
     await agent.patch(`/api/v1/admin/members/${target.id}`).send({}).expect(400);
 
+    const memberSession = await loginAgent(t, target.email);
     const ok = await agent.patch(`/api/v1/admin/members/${target.id}`).send({ roles: ['member', 'staff'] });
     expect(ok.status).toBe(200);
     expect(ok.body.data.roles).toEqual(['member', 'staff']);
+    await memberSession.get('/api/v1/auth/session').expect(401);
+    const staffSession = await loginAgent(t, target.email);
+    await agent
+      .patch(`/api/v1/admin/members/${target.id}`)
+      .send({ roles: ['staff', 'member'] })
+      .expect(200);
+    await staffSession.get('/api/v1/admin/dashboard').expect(200);
     const log = await agent.get(`/api/v1/admin/audit-events?q=${encodeURIComponent('대상회원')}`).expect(200);
     expect(log.body.data.items[0]).toMatchObject({ action: 'user.update', targetId: target.id });
 

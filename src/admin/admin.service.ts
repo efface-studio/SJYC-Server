@@ -142,7 +142,12 @@ export class AdminService {
           ...(patch.status ? { status: patch.status } : {}),
         },
       });
-      if (patch.status && patch.status !== 'active') await tx.session.deleteMany({ where: { userId: id } });
+      const rolesChanged =
+        patch.roles &&
+        (u.roles.length !== target.roles.length || u.roles.some((role) => !target.roles.includes(role)));
+      if (rolesChanged || (patch.status && patch.status !== 'active')) {
+        await tx.session.deleteMany({ where: { userId: id } });
+      }
       if (patch.status === 'withdrawn') {
         await tx.authToken.deleteMany({ where: { userId: id } });
         await tx.userProfilePhoto.deleteMany({ where: { userId: id } });

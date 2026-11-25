@@ -461,3 +461,53 @@ it('임시 가입을 끄면 이전 임시 요청은 만료되고 새 요청과 �
     resetEnvCache();
   }
 });
+
+it.each(['staff', 'admin', 'developer'] as const)(
+  '미인증 %s는 연락처 요건을 유예한 동안 새 로그인으로 관리자 업무에 접근한다',
+  async (role) => {
+    const user = await createUser(t);
+    await t.prisma.user.update({
+      where: { id: user.id },
+      data: { emailVerified: false, temporarySignupAt: new Date() },
+    });
+    vi.stubEnv('OPERATOR_CONTACT_POLICY', 'deferred');
+    resetEnvCache();
+    try {
+      const old = await loginAgent(t, user.email);
+      const dashboard = '/api/v1/admin/dashboard';
+      const session = '/api/v1/auth/session';
+      const credentials = { email: user.email, password: PASSWORD };
+      await old.get(dashboard).expect(403);
+      await t.prisma.user.update({ where: { id: user.id }, data: { roles: [role] } });
+      await old.get(session).expect(401);
+      await t.http
+        .post('/api/v1/auth/login')
+        .send({ ...credentials, password: 'wrong-password' })
+        .expect(400);
+      const fresh = await loginAgent(t, user.email);
+      await fresh.get(dashboard).expect(200);
+      expect((await fresh.get(session).expect(200)).body.data.user).toMatchObject({
+        roles: [role],
+        emailVerified: false,
+      });
+      vi.stubEnv('OPERATOR_CONTACT_POLICY', 'required');
+      resetEnvCache();
+      await fresh.get(session).expect(401);
+      await t.http.post('/api/v1/auth/login').send(credentials).expect(403);
+      vi.stubEnv('OPERATOR_CONTACT_POLICY', 'deferred');
+      resetEnvCache();
+      await t.prisma.user.update({ where: { id: user.id }, data: { status: 'suspended' } });
+      await t.http.post('/api/v1/auth/login').send(credentials).expect(403);
+      await fresh.get(session).expect(401);
+      await t.prisma.user.update({ where: { id: user.id }, data: { status: 'withdrawn' } });
+      await t.http.post('/api/v1/auth/login').send(credentials).expect(400);
+      expect(await t.prisma.user.findUniqueOrThrow({ where: { id: user.id } })).toMatchObject({
+        emailVerified: false,
+        signupPhoneVerifiedAt: null,
+      });
+    } finally {
+      vi.unstubAllEnvs();
+      resetEnvCache();
+    }
+  },
+);
