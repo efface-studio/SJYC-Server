@@ -17,6 +17,7 @@
     "test": "prisma generate && vitest run",
     "db:migrate": "prisma migrate dev",
     "db:deploy": "prisma migrate deploy",
+    "policies:register": "tsx scripts/register-policies.ts",
     "db:seed": "tsx prisma/seed.ts",
     "db:reset": "prisma migrate reset --force",
     "sync:shared": "node scripts/sync-shared.mjs",
