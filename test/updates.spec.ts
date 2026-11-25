@@ -11,7 +11,7 @@ describe('두 앱의 플랫폼별 OTA 전체 배포', () => {
   beforeAll(async () => {
     root = await mkdtemp(join(tmpdir(), 'sjyc-ota-test-'));
     vi.stubEnv('OTA_DIRECTORY', root);
-    vi.stubEnv('OTA_ROLLBACK_KEY_FILE',join(root,'qa-key.pem'));
+    vi.stubEnv('OTA_ROLLBACK_KEY_FILE', join(root, 'qa-key.pem'));
     resetEnvCache();
     t = await createTestApp();
   });
@@ -26,15 +26,15 @@ describe('두 앱의 플랫폼별 OTA 전체 배포', () => {
       dir = join(releases, Date.now() + '-' + randomUUID());
     const { publicKey, privateKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
     const get = (flavor: string, platform: string, runtime = 'sdk57') =>
-      t.http
-        .get('/api/v1/ota/manifest')
-        .set({
-          'expo-platform': platform,
-          'x-sjyc-flavor': flavor,
-          'expo-runtime-version': runtime,
-          'expo-channel-name': 'preview',
-        });
-    await writeFile(join(root,'qa-key.pem'),privateKey.export({format:'pem',type:'pkcs8'}),{mode:0o600});
+      t.http.get('/api/v1/ota/manifest').set({
+        'expo-platform': platform,
+        'x-sjyc-flavor': flavor,
+        'expo-runtime-version': runtime,
+        'expo-channel-name': 'preview',
+      });
+    await writeFile(join(root, 'qa-key.pem'), privateKey.export({ format: 'pem', type: 'pkcs8' }), {
+      mode: 0o600,
+    });
     await get('user', 'ios').expect(204);
     await t.http.get('/api/v1/admin/app-updates').expect(401);
     const member = await signedIn(t, ['member']);
@@ -97,35 +97,64 @@ describe('두 앱의 플랫폼별 OTA 전체 배포', () => {
       seen: 1,
       running: 1,
     });
-    const id=variants.user.ios.id;
-    const change=(targetId:string,body:object)=>admin.agent.post('/api/v1/admin/app-updates/'+targetId+'/control').send(body);
-    await member.agent.post('/api/v1/admin/app-updates/'+id+'/control').send({action:'rollout',percent:25}).expect(403);
-    await change(id,{action:'rollout',percent:12}).expect(400);
-    await change(id,{action:'rollout',percent:10}).expect(201);
-    await get('user','ios').expect(204);
-    await get('admin','ios').expect(200);
-    await change(id,{action:'rollout',percent:100}).expect(201);
-    await get('user','ios').expect(200);
-    const newer=join(releases,(Date.now()+100)+'-'+randomUUID());
-    await file.cp(dir,newer,{recursive:true});
-    const next=structuredClone(variants);
-    for(const flavor of ['user','admin'] as const)for(const platform of ['ios','android'] as const){
-      const variant=next[flavor][platform];variant.id=randomUUID();
-      const content=JSON.stringify({id:variant.id,runtimeVersion:'sdk57',testAsset:'second release'});
-      await writeFile(join(newer,flavor+'-'+platform+'.json'),content);
-      await writeFile(join(newer,flavor+'-'+platform+'.sig'),createSign('RSA-SHA256').update(content).sign(privateKey,'base64'));
-    }
-    await writeFile(join(newer,'release.json'),JSON.stringify({...next,message:'두 번째',channel:'preview',createdAt:new Date(Date.now()+50).toISOString()}));
-    await change(next.user.ios.id,{action:'rollback',target:'previous'}).expect(201);
-    const restored=await get('user','ios').expect(200);
-    const result=JSON.parse(restored.text);
-    expect(result.id).not.toBe(id);expect(result.testAsset).toBeUndefined();
-    expect(verify('sha256',Buffer.from(restored.text),publicKey,Buffer.from(String(restored.headers['expo-signature']).match(/sig="([^"]+)"/)![1]!,'base64'))).toBe(true);
-    await change(next.user.ios.id,{action:'rollout',percent:100}).expect(409);
-    await change(result.id,{action:'rollback',target:'embedded'}).expect(201);
-    const directive=await get('user','ios').set('expo-current-update-id',result.id).expect(200);
+    const id = variants.user.ios.id;
+    const change = (targetId: string, body: object) =>
+      admin.agent.post('/api/v1/admin/app-updates/' + targetId + '/control').send(body);
+    await member.agent
+      .post('/api/v1/admin/app-updates/' + id + '/control')
+      .send({ action: 'rollout', percent: 25 })
+      .expect(403);
+    await change(id, { action: 'rollout', percent: 12 }).expect(400);
+    await change(id, { action: 'rollout', percent: 10 }).expect(201);
+    await get('user', 'ios').expect(204);
+    await get('admin', 'ios').expect(200);
+    await change(id, { action: 'rollout', percent: 100 }).expect(201);
+    await get('user', 'ios').expect(200);
+    const newer = join(releases, Date.now() + 100 + '-' + randomUUID());
+    await file.cp(dir, newer, { recursive: true });
+    const next = structuredClone(variants);
+    for (const flavor of ['user', 'admin'] as const)
+      for (const platform of ['ios', 'android'] as const) {
+        const variant = next[flavor][platform];
+        variant.id = randomUUID();
+        const content = JSON.stringify({
+          id: variant.id,
+          runtimeVersion: 'sdk57',
+          testAsset: 'second release',
+        });
+        await writeFile(join(newer, flavor + '-' + platform + '.json'), content);
+        await writeFile(
+          join(newer, flavor + '-' + platform + '.sig'),
+          createSign('RSA-SHA256').update(content).sign(privateKey, 'base64'),
+        );
+      }
+    await writeFile(
+      join(newer, 'release.json'),
+      JSON.stringify({
+        ...next,
+        message: '두 번째',
+        channel: 'preview',
+        createdAt: new Date(Date.now() + 50).toISOString(),
+      }),
+    );
+    await change(next.user.ios.id, { action: 'rollback', target: 'previous' }).expect(201);
+    const restored = await get('user', 'ios').expect(200);
+    const result = JSON.parse(restored.text);
+    expect(result.id).not.toBe(id);
+    expect(result.testAsset).toBeUndefined();
+    expect(
+      verify(
+        'sha256',
+        Buffer.from(restored.text),
+        publicKey,
+        Buffer.from(String(restored.headers['expo-signature']).match(/sig="([^"]+)"/)![1]!, 'base64'),
+      ),
+    ).toBe(true);
+    await change(next.user.ios.id, { action: 'rollout', percent: 100 }).expect(409);
+    await change(result.id, { action: 'rollback', target: 'embedded' }).expect(201);
+    const directive = await get('user', 'ios').set('expo-current-update-id', result.id).expect(200);
     expect(directive.headers['content-type']).toContain('multipart/mixed');
-    await get('user','ios').set('expo-current-update-id',id).set('expo-embedded-update-id',id).expect(204);
-    await get('admin','ios').expect(200);
+    await get('user', 'ios').set('expo-current-update-id', id).set('expo-embedded-update-id', id).expect(204);
+    await get('admin', 'ios').expect(200);
   });
 });
