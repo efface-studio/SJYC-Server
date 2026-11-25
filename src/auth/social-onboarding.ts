@@ -83,7 +83,8 @@ export class SocialOnboarding {
       birthDate,
       verifiedEmail,
       needsConsent: userId === null,
-      previewCode: env().SIGNUP_PREVIEW_CODE === 'on',
+      previewCode:
+        env().SIGNUP_PREVIEW_CODE === 'on' || (!userId && env().SIGNUP_TEMPORARY_REGISTRATION === 'on'),
     };
   }
 

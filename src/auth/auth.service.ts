@@ -10,7 +10,7 @@ import { MailService, requireMailDelivery } from '../mail/mail.service';
 import { PrismaService } from '../prisma/prisma.service';
 import type { LoginInput, SignupInput } from '../shared/domain/schemas';
 import { PhoneSignup } from './phone-signup';
-import { SessionService } from './session.service';
+import { isTemporaryMember, SessionService } from './session.service';
 import { hashToken, randomToken } from './tokens';
 
 const VERIFY_TTL_MS = 24 * 3_600_000;
@@ -42,6 +42,7 @@ export class AuthService {
       (existing.status !== 'active' ||
         existing.emailVerified ||
         existing.signupPhoneVerifiedAt ||
+        existing.temporarySignupAt ||
         !existing.passwordHash ||
         !(await argon2.verify(existing.passwordHash, input.password)))
     )
@@ -97,7 +98,11 @@ export class AuthService {
     if (user.status === 'suspended') {
       throw new AppException('FORBIDDEN', '이용이 제한된 계정입니다. 센터에 문의해 주세요.');
     }
-    if (!user.emailVerified && !user.signupPhoneVerifiedAt) {
+    if (
+      !user.emailVerified &&
+      !user.signupPhoneVerifiedAt &&
+      (!isTemporaryMember(user) || (await this.prisma.clubManager.count({ where: { userId: user.id } })))
+    ) {
       throw new AppException('FORBIDDEN', '이메일 인증을 완료한 뒤 로그인할 수 있습니다.');
     }
     await this.limiter.reset(key);

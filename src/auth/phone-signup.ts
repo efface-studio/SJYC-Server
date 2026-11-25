@@ -16,6 +16,7 @@ export type Enrollment = {
   birthDate: string | null;
   birthYear: number;
   marketing: boolean;
+  temporarySignup?: boolean;
 } & (
   | { kind: 'password'; passwordHash: string; userId: string | null }
   | {
@@ -51,7 +52,10 @@ const formatPhone = (p: string) => p.replace(/-/g, '').replace(/^(01.)(\d{3,4})(
 const digest = (ticket: string, phone: string, code: string) => hashToken(ticket + ':' + phone + ':' + code);
 const publicState = (row: SignupPhoneChallenge) => ({
   phone: row.phone,
-  verificationMode: env().SIGNUP_PREVIEW_CODE === 'on' ? ('preview' as const) : ('sms' as const),
+  verificationMode:
+    (row.data as Enrollment).temporarySignup || env().SIGNUP_PREVIEW_CODE === 'on'
+      ? ('preview' as const)
+      : ('sms' as const),
   resendAt: new Date(+row.sentAt + 30000).toISOString(),
   expiresAt: row.codeExpiresAt.toISOString(),
 });
@@ -110,12 +114,16 @@ export class PhoneSignup implements OnModuleInit, OnModuleDestroy {
           (await this.limit.exceeded('signup-sms:scope:' + scope, 8, 3600))
         )
           throw new AppException('RATE_LIMITED', '인증 요청이 많습니다. 잠시 후 다시 시도해 주세요.');
+        // 공개 체험 코드는 새 회원 가입에만 사용한다. 기존 계정은 실제 문자 확인을 거친다.
+        const temporarySignup = !data.userId && env().SIGNUP_TEMPORARY_REGISTRATION === 'on';
         const code =
-          env().SIGNUP_PREVIEW_CODE === 'on' ? '284600' : String(randomInt(1000000)).padStart(6, '0');
+          temporarySignup || env().SIGNUP_PREVIEW_CODE === 'on'
+            ? '284600'
+            : String(randomInt(1000000)).padStart(6, '0');
         const now = Date.now();
         const values = {
           ticketHash: hashToken(ticket),
-          data,
+          data: { ...data, temporarySignup },
           phone,
           codeHash: digest(ticket, phone, code),
           attempts: 0,
@@ -128,7 +136,7 @@ export class PhoneSignup implements OnModuleInit, OnModuleDestroy {
           create: { scope, ...values },
           update: values,
         });
-        await this.sms.send(phone, code);
+        if (!temporarySignup) await this.sms.send(phone, code);
         return result;
       },
       { timeout: 10000 },
@@ -142,6 +150,9 @@ export class PhoneSignup implements OnModuleInit, OnModuleDestroy {
         await lock(tx, initial.scope);
         const row = await tx.signupPhoneChallenge.findUnique({ where: { ticketHash: hashToken(ticket) } });
         if (!row || +row.expiresAt <= Date.now()) throw invalid();
+        const enrollment = row.data as Enrollment;
+        if (enrollment.temporarySignup && (enrollment.userId || env().SIGNUP_TEMPORARY_REGISTRATION !== 'on'))
+          throw invalid();
         if (+row.codeExpiresAt <= Date.now())
           throw new AppException('VALIDATION', '코드의 유효 시간이 지났습니다. 새 코드를 요청해 주세요.');
         if (row.attempts >= 5)
@@ -153,7 +164,6 @@ export class PhoneSignup implements OnModuleInit, OnModuleDestroy {
           });
           return null;
         }
-        const enrollment = row.data as Enrollment;
         const now = new Date(),
           at = now.toISOString();
         const info = {
@@ -162,7 +172,8 @@ export class PhoneSignup implements OnModuleInit, OnModuleDestroy {
           birthYear: enrollment.birthYear,
           birthDate: enrollment.birthDate ? new Date(enrollment.birthDate) : null,
           phone: row.phone,
-          signupPhoneVerifiedAt: now,
+          signupPhoneVerifiedAt: enrollment.temporarySignup ? null : now,
+          temporarySignupAt: enrollment.temporarySignup ? now : null,
           emailVerified: enrollment.kind === 'social' && enrollment.emailVerified,
         };
         const consents = [
@@ -189,6 +200,7 @@ export class PhoneSignup implements OnModuleInit, OnModuleDestroy {
                   passwordHash: enrollment.passwordHash,
                   emailVerified: false,
                   signupPhoneVerifiedAt: null,
+                  temporarySignupAt: null,
                 };
           const updated = await tx.user.updateMany({
             where: { id: userId, status: 'active', ...guard },

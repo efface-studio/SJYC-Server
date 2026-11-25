@@ -25,3 +25,5 @@ curl -i https://sjyc.efface.dev/api/v1/auth/session
 ```
 
 `release_dir`에는 배포할 릴리스 디렉터리의 절대 경로를 지정한다. 환경 설정만 변경한 경우 `launchctl kickstart -k "gui/$(id -u)/dev.efface.sjyc.production-api"`로 다시 읽는다. 이전 코드로 복구하려면 이전 릴리스 경로를 설치 스크립트에 전달한다. 헬스체크는 PostgreSQL 및 Redis 연결이 모두 정상이면 200을 반환한다. 쿠키가 없는 세션 조회의 정상 응답은 401과 `UNAUTHENTICATED`이다.
+
+신규 일반회원에게 임시 가입 코드를 제공하려면 운영 환경에서 `SIGNUP_TEMPORARY_REGISTRATION=on`을 설정합니다. 유효한 가입 요청에서 `284600`을 입력하면 일반회원으로 가입할 수 있습니다. 번호 소유 인증 시각은 비워 둡니다. 실제 문자 발송을 시작할 때 이 옵션을 끄면 대기 중인 임시 요청도 만료되며, 이미 가입한 일반회원은 비밀번호로 계속 로그인할 수 있습니다.

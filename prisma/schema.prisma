@@ -45,6 +45,8 @@ model User {
   roles         Role[]          @default([member])
   status        UserStatus      @default(active)
   signupPhoneVerifiedAt DateTime?
+  /// 번호 소유 확인 없이 신규 일반회원 가입만 완료한 시각
+  temporarySignupAt DateTime?
   emailVerified Boolean         @default(false)
   providers     OAuthProvider[] @default([])
   /// ConsentRecord[] — 약관·개인정보·마케팅 동의 이력
