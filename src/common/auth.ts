@@ -1,3 +1,6 @@
+import { checkContact, readContact } from '../auth/login-contact';
+import { hasVerifiedContact, defersOperatorContact } from '../auth/operator-login';
+import { canEnterConsole } from '../shared/domain/permissions';
 import { PrismaService } from '../prisma/prisma.service';
 import { checkActivity, type Activity } from '../operations/developer-controls';
 import {
@@ -52,6 +55,22 @@ export class AuthGuard implements CanActivate {
       const remember = this.reflector.get<boolean>(REMEMBER_DEVICE, ctx.getHandler()) === true;
       const s = await this.sessions.resolve(token, remember);
       if (s) {
+        const permission = this.reflector.getAllAndOverride<Permission | undefined>(PERMISSION, targets);
+        const path: string = typeof req.route?.path === 'string' ? req.route.path : req.path;
+        const sessionCheck = path.endsWith('/auth/session') || path.endsWith('/auth/session/remember');
+        const adminSurface =
+          !!permission ||
+          /^\/(?:api\/v1\/)?admin(?:\/|$)/.test(path) ||
+          (sessionCheck && req.query.audience === 'admin');
+        if (adminSurface && !canEnterConsole(s.user)) throw new AppException('FORBIDDEN');
+        if (adminSurface && s.audience !== 'admin') {
+          const { rule } = await readContact(this.db, 'admin');
+          checkContact(rule, s.user);
+          if (!rule && !hasVerifiedContact(s.user) && !defersOperatorContact(s.user))
+            throw new AppException('FORBIDDEN');
+        } else if (s.audience === 'admin' && sessionCheck && req.query.audience === 'user') {
+          checkContact((await readContact(this.db, 'user')).rule, s.user);
+        }
         req.user = s.user;
         req.session = { token, expiresAt: s.expiresAt };
         if (s.renewed || remember)

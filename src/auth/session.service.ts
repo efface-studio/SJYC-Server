@@ -1,9 +1,11 @@
+import { checkContact, readContact } from './login-contact';
 import { effectiveScope } from '../operations/developer-controls';
 import { Injectable } from '@nestjs/common';
 import type { User as UserRow } from '@prisma/client';
 import type { Response } from 'express';
-import { can } from '../shared/domain/permissions';
+import { can, canEnterConsole } from '../shared/domain/permissions';
 import { defersOperatorContact, hasVerifiedContact } from './operator-login';
+import { AppException } from '../common/app-exception';
 import { env, isProd } from '../config/env';
 import { PrismaService } from '../prisma/prisma.service';
 import { hashToken, randomToken } from './tokens';
@@ -21,6 +23,7 @@ export interface ResolvedSession {
   user: AuthUser;
   expiresAt: Date;
   renewed: boolean;
+  audience: 'admin' | 'user';
 }
 
 @Injectable()
@@ -36,14 +39,31 @@ export class SessionService {
     userAgent?: string,
     operatorLogin = false,
   ): Promise<{ token: string; expiresAt: Date }> {
-    const token = randomToken();
+    const account = await this.prisma.user.findUniqueOrThrow({
+      where: { id: userId },
+      include: { managedClubs: { select: { clubId: true } } },
+    });
+    if (account.status !== 'active') throw new AppException('FORBIDDEN');
+    if (operatorLogin) {
+      const permissionScope = await effectiveScope(this.prisma, account.id, account.roles);
+      const actor = {
+        ...account,
+        permissionScope,
+        managedClubIds: account.managedClubs.map((c) => c.clubId),
+      };
+      if (!canEnterConsole(actor)) throw new AppException('FORBIDDEN');
+    }
+    const { rule } = await readContact(this.prisma, operatorLogin ? 'admin' : 'user');
+    checkContact(rule, account);
+    // 사용자 앱에서 발급한 쿠키와 관리자 앱에서 발급한 쿠키를 구분한다.
+    const token = (operatorLogin ? 'admin.' : 'user.') + randomToken();
     const expiresAt = new Date(Date.now() + this.ttlMs());
     await this.prisma.session.create({
       data: {
         tokenHash: hashToken(token),
         userId,
         expiresAt,
-        operatorLogin,
+        operatorLogin: operatorLogin || defersOperatorContact(account),
         userAgent: userAgent?.slice(0, 200),
       },
     });
@@ -57,7 +77,8 @@ export class SessionService {
       include: { user: { include: { managedClubs: { select: { clubId: true } } } } },
     });
     if (!s || s.expiresAt.getTime() <= Date.now() || s.user.status !== 'active') return null;
-    if (!hasVerifiedContact(s.user)) {
+    const audience = token.startsWith('user.') ? 'user' : s.operatorLogin ? 'admin' : 'user';
+    if (!hasVerifiedContact(s.user) && !(await readContact(this.prisma, audience)).rule) {
       if (can(s.user, 'admin.access')) {
         if (!s.operatorLogin || !defersOperatorContact(s.user)) return null;
       } else if (s.user.temporarySignupAt && (!isTemporaryMember(s.user) || s.user.managedClubs.length > 0)) {
@@ -73,7 +94,7 @@ export class SessionService {
     const remembered = s.remembered || remember;
     const ttl = this.ttlMs(remembered);
     if (remembered === s.remembered && s.expiresAt.getTime() - Date.now() >= ttl / 2) {
-      return { user, expiresAt: s.expiresAt, renewed: false };
+      return { user, audience, expiresAt: s.expiresAt, renewed: false };
     }
     const now = new Date();
     if (s.expiresAt <= now) return null;
@@ -84,7 +105,7 @@ export class SessionService {
     });
     // 다른 요청이 먼저 갱신하거나 로그아웃한 경우 DB의 최신 상태를 따른다.
     if (!updated.count) return this.resolve(token, remember);
-    return { user, expiresAt, renewed: true };
+    return { user, audience, expiresAt, renewed: true };
   }
 
   async devices(userId: string, currentToken: string) {
