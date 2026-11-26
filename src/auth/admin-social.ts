@@ -7,6 +7,7 @@ import { RedisService } from '../redis/redis.service';
 import { canEnterConsole } from '../shared/domain/permissions';
 import type { LoginInput } from '../shared/domain/schemas';
 import { AuthService } from './auth.service';
+import { checkContact, readContact } from './login-contact';
 import { defersOperatorContact, hasVerifiedContact } from './operator-login';
 import { SessionService } from './session.service';
 import { randomToken, hashToken } from './tokens';
@@ -45,12 +46,14 @@ export class AdminSocial {
       where: { provider_subject: identity },
       include: { user: { include } },
     });
+    const { rule } = await readContact(this.db, 'admin');
     if (
       linked &&
-      (hasVerifiedContact(linked.user) || defersOperatorContact(linked.user)) &&
+      (rule || hasVerifiedContact(linked.user) || defersOperatorContact(linked.user)) &&
       canEnterConsole({ ...linked.user, managedClubIds: linked.user.managedClubs.map((m) => m.clubId) })
     ) {
-      await this.signIn(linked.userId, agent, res, defersOperatorContact(linked.user));
+      checkContact(rule, linked.user);
+      await this.signIn(linked.userId, agent, res, true);
       return { signedIn: true, needsLink: false };
     }
     const token = randomToken();
@@ -85,15 +88,17 @@ export class AdminSocial {
       (await this.limiter.exceeded('admin-link:' + ip, 25, 600))
     )
       throw new AppException('RATE_LIMITED');
-    const owner = await this.auth.verifyLogin(input, ip);
+    const owner = await this.auth.verifyLogin(input, ip, 'admin');
     const operatorLogin = await this.db
       .$transaction(async (tx) => {
         await tx.$queryRaw`SELECT "id" FROM "User" WHERE "id" = ${owner.id} FOR UPDATE`;
         const user = await tx.user.findUniqueOrThrow({ where: { id: owner.id }, include });
+        const { rule } = await readContact(tx, 'admin');
+        checkContact(rule, user);
         if (
           user.passwordHash !== owner.passwordHash ||
           user.email !== owner.email ||
-          (!hasVerifiedContact(user) && !defersOperatorContact(user)) ||
+          (!rule && !hasVerifiedContact(user) && !defersOperatorContact(user)) ||
           !canEnterConsole({ ...user, managedClubIds: user.managedClubs.map((m) => m.clubId) })
         )
           throw denied();
@@ -115,7 +120,7 @@ export class AdminSocial {
             summary: '관리자 소셜 계정 연결 · ' + identity.provider,
           },
         });
-        return defersOperatorContact(user);
+        return true;
       })
       .catch((error: unknown) => {
         if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') throw denied();

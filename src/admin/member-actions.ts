@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { Prisma, type User } from '@prisma/client';
 import { z } from 'zod';
+import { phoneUpdate } from '../auth/login-contact';
 import { AuditService } from '../audit/audit.service';
 import { randomToken, hashToken } from '../auth/tokens';
 import { AppException } from '../common/app-exception';
@@ -86,7 +87,10 @@ export class MemberActions {
       let detail = '';
       switch (input.action) {
         case 'profile':
-          await tx.user.update({ where: { id }, data: { name: input.name, phone: input.phone } });
+          await tx.user.update({
+            where: { id },
+            data: { name: input.name, ...phoneUpdate(target.phone, input.phone) },
+          });
           break;
         case 'reset-password': {
           if (target.status !== 'active')

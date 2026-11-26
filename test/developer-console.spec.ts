@@ -153,3 +153,35 @@ it('오류 누계를 날짜별 상세와 연결한다', async () => {
     expect(detail.body.data.groups[1].rows[0].value).toBe('2건');
   }
 });
+
+it('역할 기능 변경은 기존 로그인에도 반영되고 센터 직원에게 상위 권한을 추가할 수 없다', async () => {
+  const staff = await signedIn(t, ['staff']),
+    dev = await signedIn(t, ['developer']);
+  const command = { command: 'save-base-role', id: 'staff' };
+  const form = (await dev.agent.get(base + '/view').query({ section: 'permissions', item: 'base:staff' }))
+    .body.data.forms[0];
+  const permissions: string = form.fields[0].value;
+  const changed = permissions
+    .split(',')
+    .filter((p) => p !== 'inquiry.answer')
+    .join(',');
+  await staff.agent.get('/api/v1/admin/inquiries').expect(200);
+  await dev.agent
+    .post(base + '/actions')
+    .send({ ...command, version: 0, values: { permissions: 'developer.access' } })
+    .expect(400);
+  await dev.agent
+    .post(base + '/actions')
+    .send({ ...command, version: 0, values: { permissions: changed } })
+    .expect(201);
+  await staff.agent.get('/api/v1/admin/inquiries').expect(403);
+  await dev.agent
+    .post(base + '/actions')
+    .send({ ...command, version: 0, values: { permissions } })
+    .expect(409);
+  await dev.agent
+    .post(base + '/actions')
+    .send({ ...command, version: 1, values: { permissions } })
+    .expect(201);
+  await staff.agent.get('/api/v1/admin/inquiries').expect(200);
+});

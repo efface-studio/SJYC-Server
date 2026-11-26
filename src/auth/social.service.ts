@@ -1,4 +1,3 @@
-import { defersOperatorContact } from './operator-login';
 import { Injectable } from '@nestjs/common';
 import { OAuthProvider, Prisma } from '@prisma/client';
 import { AppException } from '../common/app-exception';
@@ -139,7 +138,7 @@ export class SocialService {
       if (identity.user.status !== 'active') throw new AppException('FORBIDDEN');
       if (!identity.user.name || !identity.user.phone || !identity.user.birthDate)
         return this.onboarding.begin(provider, profile, identity.user);
-      return { userId: identity.user.id, operatorLogin: defersOperatorContact(identity.user) };
+      return { userId: identity.user.id };
     }
     try {
       await this.db.$transaction(async (tx) => {

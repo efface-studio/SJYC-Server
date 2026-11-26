@@ -1,11 +1,14 @@
-import { Body, Controller, Get, Headers, Module, Param, Post, Res } from '@nestjs/common';
+import { Distribution, universal, destination, settingsPatch, waveInput } from './distribution';
+import { hashToken, randomToken } from '../auth/tokens';
+import { PrismaService } from '../prisma/prisma.service';
+import { Body, Controller, Get, Headers, Module, Param, Post, Req, Res } from '@nestjs/common';
 import { createHash } from 'node:crypto';
 import { stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { Response } from 'express';
 import { z } from 'zod';
 import { AppException } from '../common/app-exception';
-import { CurrentUser, Public, RequirePermission } from '../common/auth';
+import { CurrentUser, Public, RequirePermission, type AuthedRequest } from '../common/auth';
 import { RedisService } from '../redis/redis.service';
 import {
   channelSchema,
@@ -16,7 +19,7 @@ import {
   runtimeSchema,
 } from './releases';
 
-import { ReleaseControls, controlInput, inRollout, signedPart, type ControlInput } from './controls';
+import { ReleaseControls, controlInput, signedPart, type ControlInput } from './controls';
 import { ZodPipe } from '../common/zod.pipe';
 import type { User } from '@prisma/client';
 
@@ -25,10 +28,16 @@ export class UpdatesController {
   constructor(
     private readonly redis: RedisService,
     private readonly controls: ReleaseControls,
+    private readonly distribution: Distribution,
+    private readonly db: PrismaService,
   ) {}
   @Public()
   @Get('ota/manifest')
-  async manifest(@Headers() headers: Record<string, string>, @Res() res: Response) {
+  async manifest(
+    @Req() req: AuthedRequest,
+    @Headers() headers: Record<string, string>,
+    @Res() res: Response,
+  ) {
     const request = z
       .object({
         'expo-platform': platformSchema,
@@ -46,14 +55,26 @@ export class UpdatesController {
       'expo-protocol-version': '1',
       'expo-sfv-version': '0',
       'Cache-Control': 'private, no-store',
-      Vary: 'x-sjyc-flavor, expo-platform, expo-runtime-version, expo-channel-name, expo-current-update-id',
+      Vary: 'x-sjyc-flavor, expo-platform, expo-runtime-version, expo-channel-name, expo-current-update-id, expo-extra-params, cookie, eas-client-id',
     });
     const device = z.uuid().safeParse(headers['eas-client-id']);
     const group = ['ota', flavor, platform, channel, runtime].join(':');
     const rows = await this.controls.rows(group);
-    const update = rows.find(
-      (row) => row.status === 'ACTIVE' && inRollout(row.id, row.rolloutPercent, device.data),
-    );
+    const ticket = /(?:^|,\s*)sjyc_audience="([A-Za-z0-9_-]{43})"(?:,|$)/.exec(
+      headers['expo-extra-params'] ?? '',
+    )?.[1];
+    let userId = req.user?.id;
+    if (!userId && ticket) {
+      const hash = await this.redis.get('ota:audience:' + hashToken(ticket));
+      if (hash) {
+        const session = await this.db.session.findFirst({
+          where: { tokenHash: hash, expiresAt: { gt: new Date() }, user: { status: 'active' } },
+          select: { userId: true },
+        });
+        userId = session?.userId;
+      }
+    }
+    const update = destination(rows, await this.distribution.read(rows), userId, device.data);
     const running = headers['expo-current-update-id']?.toLowerCase();
     if (
       !update ||
@@ -122,10 +143,43 @@ export class UpdatesController {
     });
     await new Promise<void>((resolve, reject) => res.sendFile(path, (e) => (e ? reject(e) : resolve())));
   }
+  @Public()
+  @Get('ota/context')
+  async context(@Req() req: AuthedRequest, @Res({ passthrough: true }) res: Response) {
+    res.set('Cache-Control', 'private, no-store');
+    const { splash } = await this.distribution.preferences();
+    if (!req.session) return { splash, ticket: null };
+    const ticket = randomToken();
+    await this.redis.set('ota:audience:' + hashToken(ticket), hashToken(req.session.token), 'EX', 600);
+    return { splash, ticket };
+  }
+  @RequirePermission('site.manage')
+  @Get('admin/app-updates/settings')
+  settings() {
+    return this.distribution.preferences();
+  }
+  @RequirePermission('developer.access')
+  @Post('admin/app-updates/settings')
+  configure(
+    @CurrentUser() actor: User,
+    @Body(new ZodPipe(settingsPatch)) input: z.infer<typeof settingsPatch>,
+  ) {
+    return this.distribution.configure(actor, input);
+  }
+  @RequirePermission('site.manage')
+  @Post('admin/app-updates/:id/waves')
+  wave(
+    @CurrentUser() actor: User,
+    @Param('id', new ZodPipe(z.uuid())) id: string,
+    @Body(new ZodPipe(waveInput)) input: z.infer<typeof waveInput>,
+  ) {
+    return this.distribution.change(actor, id, input);
+  }
   @RequirePermission('site.manage')
   @Get('admin/app-updates')
   async list() {
     const rows = await this.controls.rows();
+    const plans = await this.distribution.read(rows);
     return Promise.all(
       rows.map(async (row) => {
         const [seen, running] = await Promise.all([
@@ -161,19 +215,25 @@ export class UpdatesController {
           assetCount,
           seen,
           running,
+          ...this.distribution.describe(row, plans),
         };
       }),
     );
   }
   @RequirePermission('site.manage')
   @Post('admin/app-updates/:id/control')
-  change(
+  async change(
     @CurrentUser() actor: User,
     @Param('id', new ZodPipe(z.uuid())) id: string,
     @Body(new ZodPipe(controlInput)) input: ControlInput,
   ) {
-    return this.controls.change(actor, id, input);
+    const rows = await this.controls.rows(),
+      row = rows.find((r) => r.id === id);
+    const plans = await this.distribution.read(rows);
+    if (row && this.distribution.describe(row, plans).manual)
+      throw new AppException('CONFLICT', '수동 발행 릴리스에서 배포 차수를 선택해 주세요.');
+    return this.controls.change(actor, id, input, (r) => universal(r, plans));
   }
 }
-@Module({ controllers: [UpdatesController], providers: [ReleaseControls] })
+@Module({ controllers: [UpdatesController], providers: [ReleaseControls, Distribution] })
 export class UpdatesModule {}

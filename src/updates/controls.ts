@@ -139,7 +139,12 @@ export class ReleaseControls {
       .flatMap(([key, rows]) => this.combine(rows, byKey.get(key) ?? emptyState()))
       .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   }
-  async change(actor: { id: string; name: string }, id: string, input: ControlInput) {
+  async change(
+    actor: { id: string; name: string },
+    id: string,
+    input: ControlInput,
+    allowPrevious: (row: ReleaseRow) => boolean,
+  ) {
     const initial = (await this.rows()).find((r) => r.id === id);
     if (!initial) throw new AppException('NOT_FOUND');
     const originals = (await this.originals()).filter((r) => r.group === initial.group);
@@ -154,7 +159,7 @@ export class ReleaseControls {
       else {
         const previous =
           input.target === 'previous'
-            ? rows.find((r) => r.id !== id && r.status === 'ACTIVE' && r.kind === 'UPDATE')
+            ? rows.find((r) => r.createdAt < active.createdAt && allowPrevious(r))
             : undefined;
         const path = env().OTA_ROLLBACK_KEY_FILE;
         if (!path) throw new AppException('NOT_CONFIGURED', '되돌리기 서명 키가 설정되지 않았습니다.');
