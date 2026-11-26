@@ -1,4 +1,4 @@
-import { staffScope } from '../operations/developer-controls';
+import { effectiveScope } from '../operations/developer-controls';
 import { Injectable } from '@nestjs/common';
 import type { User as UserRow } from '@prisma/client';
 import type { Response } from 'express';
@@ -67,7 +67,7 @@ export class SessionService {
     const { managedClubs, ...row } = s.user;
     const user: AuthUser = {
       ...row,
-      permissionScope: await staffScope(this.prisma, row.id, row.roles),
+      permissionScope: await effectiveScope(this.prisma, row.id, row.roles),
       managedClubIds: managedClubs.map((m) => m.clubId),
     };
     const remembered = s.remembered || remember;

@@ -23,6 +23,9 @@ import {
   roleProfile,
   binding,
   staffPermissions,
+  coreRoleKey,
+  editablePermissions,
+  roleLimits,
   settingsKey,
 } from './developer-controls';
 import { recentServerLogs } from './server-logs';
@@ -38,6 +41,7 @@ const command = z.object({
     'save-role',
     'delete-role',
     'assign-role',
+    'save-base-role',
     'save-controls',
     'revoke',
     'refresh-stats',
@@ -191,19 +195,42 @@ export class DeveloperConsole {
         ],
       };
     }
-    if (ROLE_ORDER.some((r) => r === q.item)) {
-      const role = ROLE_ORDER.find((r) => r === q.item)!;
+    const role = ROLE_ORDER.find((r) => r === q.item || 'base:' + r === q.item);
+    if (role) {
+      const saved = await this.db.siteSettings.findUnique({ where: { id: coreRoleKey(role) } });
+      const disabled = saved ? roleLimits.parse(saved.values).disabled : [];
+      const permitted = PERMISSIONS.filter((p) => can({ roles: [role], status: 'active' }, p));
+      const options = editablePermissions(role);
       return {
         title: ROLE_LABEL[role],
         groups: [
           {
-            title: '기본 역할 · 허용 기능',
-            rows: PERMISSIONS.filter((p) => can({ roles: [role], status: 'active' }, p)).map((p) => ({
-              title: PERMISSION_LABEL[p],
-              detail: p,
-            })),
+            title: '기본 권한',
+            rows: permitted
+              .filter((p) => !options.includes(p))
+              .map((p) => ({ title: PERMISSION_LABEL[p], value: '항상 허용' })),
           },
         ],
+        forms: options.length
+          ? [
+              {
+                command: 'save-base-role',
+                id: role,
+                version: saved?.version ?? 0,
+                label: '역할 권한 저장',
+                message: ROLE_LABEL[role] + ' 역할에 변경한 기능 권한을 적용할까요?',
+                fields: [
+                  {
+                    key: 'permissions',
+                    label: '허용 기능',
+                    multiple: true,
+                    options: options.map((p) => ({ value: p, label: PERMISSION_LABEL[p] })),
+                    value: options.filter((p) => !disabled.includes(p)).join(','),
+                  },
+                ],
+              },
+            ]
+          : [],
       };
     }
     if (q.item === 'new' || roleKey.test(q.item)) {
@@ -261,7 +288,7 @@ export class DeveloperConsole {
     return {
       title: '권한 관리',
       groups: [
-        { title: '기본 역할', rows: ROLE_ORDER.map((r) => go(ROLE_LABEL[r], 'permissions', r)) },
+        { title: '기본 역할', rows: ROLE_ORDER.map((r) => go(ROLE_LABEL[r], 'permissions', 'base:' + r)) },
         {
           title: '사용자 정의 역할',
           rows: [
@@ -651,7 +678,7 @@ export class DeveloperConsole {
           title: '사용량',
           rows: Object.entries(counts).map(([title, n]) => ({ title, value: n.toLocaleString('ko-KR') })),
         },
-        { title: '권한 구조', rows: ROLE_ORDER.map((r) => go(ROLE_LABEL[r], 'permissions', r)) },
+        { title: '권한 구조', rows: ROLE_ORDER.map((r) => go(ROLE_LABEL[r], 'permissions', 'base:' + r)) },
       ],
     };
   }
@@ -675,11 +702,13 @@ export class DeveloperConsole {
       const originalKey =
         data.command === 'assign-role'
           ? 'dev:user:' + id
-          : data.command === 'save-controls'
-            ? settingsKey
-            : roleKey.test(id)
-              ? id
-              : '';
+          : data.command === 'save-base-role' && ROLE_ORDER.some((r) => r === id)
+            ? 'dev:base-role:' + id
+            : data.command === 'save-controls'
+              ? settingsKey
+              : roleKey.test(id)
+                ? id
+                : '';
       const original = originalKey ? await tx.siteSettings.findUnique({ where: { id: originalKey } }) : null;
       const save = async (key: string, values: Record<string, string | boolean | string[]>) => {
         const changed =
@@ -698,6 +727,18 @@ export class DeveloperConsole {
       let summary = '',
         target = id;
       switch (data.command) {
+        case 'save-base-role': {
+          const role = ROLE_ORDER.find((r) => r === id);
+          if (!role || role === 'member') throw missing();
+          const editable = editablePermissions(role),
+            selected = split('permissions');
+          if (selected.some((p) => !editable.some((e) => e === p)))
+            throw new AppException('VALIDATION', '역할 범위 안에서 선택해 주세요.');
+          target = coreRoleKey(role);
+          await save(target, { disabled: editable.filter((p) => !selected.includes(p)) });
+          summary = ROLE_LABEL[role] + ' 역할 권한 변경';
+          break;
+        }
         case 'save-role': {
           if (id && !roleKey.test(id)) throw missing();
           const def = roleProfile.safeParse({

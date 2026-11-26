@@ -31,18 +31,43 @@ export const roleProfile = z.object({
 });
 export const binding = z.object({ roleId: z.string().min(1) });
 
-export async function staffScope(
-  db: PrismaService,
+export const roleLimits = z.object({ disabled: z.array(z.enum(PERMISSIONS)) });
+export const coreRoleKey = (role: Role) => 'dev:base-role:' + role;
+export const editablePermissions = (role: Role) =>
+  PERMISSIONS.filter(
+    (p) =>
+      can({ roles: [role], status: 'active' }, p) &&
+      p !== 'admin.access' &&
+      !(role === 'developer' && ['developer.view', 'developer.access', 'site.manage'].includes(p)),
+  );
+
+export async function effectiveScope(
+  db: Pick<PrismaService, 'siteSettings'>,
   id: string,
   roles: Role[],
 ): Promise<Permission[] | undefined> {
-  if (!roles.includes('staff') || roles.includes('admin') || roles.includes('developer')) return;
-  const assigned = await db.siteSettings.findUnique({ where: { id: 'dev:user:' + id } });
-  if (!assigned) return;
+  if (!roles.some((r) => r !== 'member')) return;
+  const custom = roles.includes('staff') && !roles.includes('developer') && !roles.includes('admin');
+  const records = await db.siteSettings.findMany({
+    where: { id: { in: [...roles.map(coreRoleKey), ...(custom ? ['dev:user:' + id] : [])] } },
+  });
+  if (!records.length) return;
+  const disabled = new Map(
+    records
+      .filter((r) => r.id.startsWith('dev:base-role:'))
+      .map((r) => [r.id, roleLimits.parse(r.values).disabled]),
+  );
+  const allowed = PERMISSIONS.filter((p) =>
+    roles.some(
+      (role) => can({ roles: [role], status: 'active' }, p) && !disabled.get(coreRoleKey(role))?.includes(p),
+    ),
+  );
+  const assigned = records.find((r) => r.id === 'dev:user:' + id);
+  if (!assigned) return allowed;
   const def = await db.siteSettings.findUnique({ where: { id: binding.parse(assigned.values).roleId } });
-  return def ? roleProfile.parse(def.values).permissions : [];
+  const scoped = def ? roleProfile.parse(def.values).permissions : [];
+  return allowed.filter((p) => scoped.includes(p));
 }
-
 export async function checkActivity(db: PrismaService, activity: Activity) {
   const row = await db.siteSettings.findUnique({ where: { id: settingsKey } });
   if (!row) return;

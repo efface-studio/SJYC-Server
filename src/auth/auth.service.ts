@@ -1,4 +1,4 @@
-import { staffScope } from '../operations/developer-controls';
+import { effectiveScope } from '../operations/developer-controls';
 import { Injectable } from '@nestjs/common';
 import { type AuthTokenPurpose } from '@prisma/client';
 import argon2 from 'argon2';
@@ -120,7 +120,7 @@ export class AuthService {
     return {
       user: {
         ...user,
-        permissionScope: await staffScope(this.prisma, user.id, user.roles),
+        permissionScope: await effectiveScope(this.prisma, user.id, user.roles),
         managedClubIds: managed.map((m) => m.clubId),
       },
       ...session,
