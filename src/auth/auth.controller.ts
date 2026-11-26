@@ -1,3 +1,4 @@
+import { ContactRequired } from './login-contact';
 import { PhoneSignup, phoneCookie, savePhoneTicket, clearPhoneTicket } from './phone-signup';
 import { SignupSms } from './signup-sms';
 import { profileSchema } from '../shared/domain/schemas';
@@ -25,6 +26,8 @@ import type { Session } from '../shared/domain/types';
 import { toUser } from '../users/user.mapper';
 import { AuthService } from './auth.service';
 import { SessionService } from './session.service';
+
+import { loginAudience, type LoginAudience } from '../shared/domain/login-contact';
 
 const resetConfirmSchema = z.object({ token: z.string().min(1).max(200), password: z.string() });
 
@@ -55,11 +58,17 @@ export class AuthController {
   @Post('login')
   @HttpCode(200)
   async login(
-    @Body(new ZodPipe(apiInput(loginSchema))) input: LoginInput,
+    @Body(new ZodPipe(apiInput(loginSchema.extend({ audience: loginAudience.optional() }))))
+    input: LoginInput & { audience?: LoginAudience },
     @Req() req: Request,
     @Res({ passthrough: true }) res: Response,
   ): Promise<Session> {
-    const { user, token, expiresAt } = await this.auth.login(input, clientIp(req), req.get('user-agent'));
+    const { user, token, expiresAt } = await this.auth.login(
+      input,
+      clientIp(req),
+      req.get('user-agent'),
+      input.audience,
+    );
     this.sessions.setCookie(res, token, expiresAt);
     return { user: toUser(user), expiresAt: expiresAt.toISOString() };
   }
@@ -117,8 +126,13 @@ export class AuthController {
     const result = await this.phone.confirm(String(req.cookies?.[phoneCookie] ?? ''), body.code);
     clearPhoneTicket(res);
     if (result.social) {
-      const session = await this.sessions.create(result.userId, req.get('user-agent'));
-      this.sessions.setCookie(res, session.token, session.expiresAt);
+      try {
+        const session = await this.sessions.create(result.userId, req.get('user-agent'));
+        this.sessions.setCookie(res, session.token, session.expiresAt);
+      } catch (error) {
+        if (error instanceof ContactRequired) return { signedIn: false };
+        throw error;
+      }
     }
     return { signedIn: result.social };
   }

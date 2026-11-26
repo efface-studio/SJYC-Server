@@ -142,7 +142,7 @@ export class SocialController {
   }
 
   private async resolve(
-    result: { onboarding: string } | { userId: string; operatorLogin?: boolean },
+    result: { onboarding: string } | { userId: string },
     req: AuthedRequest,
     res: Response,
   ) {
@@ -151,7 +151,7 @@ export class SocialController {
       return { signedIn: false, needsProfile: true };
     }
     if (!req.user) {
-      const session = await this.sessions.create(result.userId, req.get('user-agent'), result.operatorLogin);
+      const session = await this.sessions.create(result.userId, req.get('user-agent'));
       this.sessions.setCookie(res, session.token, session.expiresAt);
     }
     return { signedIn: true, needsProfile: false };
