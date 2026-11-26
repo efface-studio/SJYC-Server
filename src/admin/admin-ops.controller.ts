@@ -21,6 +21,7 @@ export const decisionBody = z.object({
 });
 const bulkDecisionBody = decisionBody.extend({ ids: z.array(id).min(1).max(100) });
 
+const clubApplicationQuery = adminListQuery.extend({ clubId: id.optional() });
 const applicationQuery = adminListQuery.extend({ programId: id.optional() });
 const reservationQuery = adminListQuery.extend({
   spaceId: id.optional(),
@@ -144,8 +145,8 @@ export class AdminOpsController {
 
   @RequirePermission('club.manage')
   @Get('club-applications')
-  clubApplications(@Query(new ZodPipe(adminListQuery)) q: AdminListQuery) {
-    return this.ops.clubApplications(q);
+  clubApplications(@Query(new ZodPipe(clubApplicationQuery)) q: z.infer<typeof clubApplicationQuery>) {
+    return this.ops.clubApplications(q, q.clubId);
   }
 
   @RequirePermission('club.manage')

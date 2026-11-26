@@ -1,3 +1,4 @@
+import type { ApplicationContentEdit } from '../shared/domain/types';
 import type { Program as ProgramRow, ProgramApplication as ApplicationRow } from '@prisma/client';
 import { computeRecruitStatus } from '../shared/domain/program';
 import type { Program, ProgramApplication, StatusHistoryEntry } from '../shared/domain/types';
@@ -38,6 +39,7 @@ export function toApplication(
     applicantName: a.applicantName,
     phone: a.phone,
     note: a.note,
+    contentEdits: a.contentEdits as unknown as ApplicationContentEdit[],
     status: a.status,
     createdAt: a.createdAt.toISOString(),
     history: a.history as unknown as StatusHistoryEntry[],

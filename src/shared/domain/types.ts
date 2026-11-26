@@ -86,6 +86,9 @@ export interface StatusHistoryEntry {
   reason: string | null;
 }
 
+export type ApplicationContentEdit = { previous: string; next: string; at: string };
+export type ApplicationEditInput = { value: string; revision: number };
+
 export interface ProgramApplication {
   id: string;
   /** 서버가 발급한 접수 번호. 미발급이면 null — 클라이언트에서 만들지 않는다. */
@@ -96,6 +99,7 @@ export interface ProgramApplication {
   applicantName: string;
   phone: string;
   note: string;
+  contentEdits?: ApplicationContentEdit[];
   status: ApplicationStatus;
   createdAt: string;
   history: StatusHistoryEntry[];
@@ -208,6 +212,7 @@ export interface ClubApplication {
   userId: string;
   applicantName: string;
   motivation: string;
+  contentEdits?: ApplicationContentEdit[];
   status: ClubApplicationStatus;
   reason: string | null;
   createdAt: string;

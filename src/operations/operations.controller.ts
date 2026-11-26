@@ -7,6 +7,13 @@ import { AppException } from '../common/app-exception';
 import { ZodPipe } from '../common/zod.pipe';
 import { PrismaService } from '../prisma/prisma.service';
 import { settingsSchema, settingsWriteSchema, type SettingsRecord } from '../shared/domain/site-settings';
+import { policyKey, readContact } from '../auth/login-contact';
+import {
+  contactPatch,
+  type ContactPatch,
+  type ContactSettings,
+  audienceLabels,
+} from '../shared/domain/login-contact';
 import { recentServerLogs } from './server-logs';
 
 @Controller()
@@ -50,6 +57,48 @@ export class OperationsController {
       );
       return next;
     });
+  }
+  @RequirePermission('site.manage')
+  @Get('admin/login-contact')
+  async loginContact(): Promise<ContactSettings> {
+    const [user, admin] = await Promise.all([
+      readContact(this.prisma, 'user'),
+      readContact(this.prisma, 'admin'),
+    ]);
+    return { user, admin };
+  }
+  @RequirePermission('site.manage')
+  @Put('admin/login-contact')
+  async setLoginContact(@CurrentUser() actor: User, @Body(new ZodPipe(contactPatch)) input: ContactPatch) {
+    const { audience, version, ...rule } = input,
+      id = policyKey(audience);
+    await this.prisma.$transaction(async (tx) => {
+      const before = await readContact(tx, audience);
+      const saved =
+        version === 0
+          ? await tx.siteSettings.createMany({
+              data: [{ id, values: rule, version: 1 }],
+              skipDuplicates: true,
+            })
+          : await tx.siteSettings.updateMany({
+              where: { id, version },
+              data: { values: rule, version: { increment: 1 } },
+            });
+      if (saved.count !== 1)
+        throw new AppException('CONFLICT', '다른 관리자가 변경했습니다. 최신 설정을 확인해 주세요.');
+      await this.audit.record(
+        actor,
+        {
+          action: 'auth.contact-policy.update',
+          targetType: 'site_settings',
+          targetId: id,
+          summary: audienceLabels[audience] + ' 미인증 로그인 정책 변경',
+        },
+        tx,
+        { before: JSON.stringify(before.rule), after: JSON.stringify(rule) },
+      );
+    });
+    return this.loginContact();
   }
   @RequirePermission('developer.access')
   @Get('admin/server-logs')

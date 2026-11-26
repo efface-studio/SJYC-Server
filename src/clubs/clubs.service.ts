@@ -1,3 +1,4 @@
+import type { ApplicationEditInput } from '../shared/domain/types';
 import { Injectable } from '@nestjs/common';
 import { Prisma, type User as UserRow } from '@prisma/client';
 import { AppException } from '../common/app-exception';
@@ -79,6 +80,33 @@ export class ClubsService {
       }
       throw e;
     }
+  }
+
+  async editApplication(userId: string, id: string, input: ApplicationEditInput) {
+    return this.prisma.$transaction(async (tx) => {
+      // 같은 신청의 수정 순서를 직렬화한다. 소유자가 아닌 경우 행을 잠그지 않는다.
+      await tx.$queryRaw`SELECT id FROM "ClubApplication" WHERE id = ${id} AND "userId" = ${userId} FOR UPDATE`;
+      const row = await tx.clubApplication.findFirst({ where: { id, userId }, include: { club: true } });
+      if (!row) throw NOT_FOUND();
+      const current = toClubApplication(row);
+      if (current.motivation === input.value) return current;
+      const edits = current.contentEdits ?? [];
+      if (edits.length !== input.revision) {
+        throw new AppException('CONFLICT', '신청 내용이 변경되었습니다. 다시 확인해 주세요.');
+      }
+      const updated = await tx.clubApplication.update({
+        where: { id },
+        data: {
+          motivation: input.value,
+          contentEdits: [
+            ...edits,
+            { previous: current.motivation, next: input.value, at: new Date().toISOString() },
+          ],
+        },
+        include: { club: true },
+      });
+      return toClubApplication(updated);
+    });
   }
 
   async mine(userId: string): Promise<MyClub[]> {

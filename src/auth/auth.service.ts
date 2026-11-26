@@ -1,4 +1,7 @@
-import { staffScope } from '../operations/developer-controls';
+import { checkContact, readContact } from './login-contact';
+import type { LoginAudience } from '../shared/domain/login-contact';
+import { canEnterConsole } from '../shared/domain/permissions';
+import { effectiveScope } from '../operations/developer-controls';
 import { Injectable } from '@nestjs/common';
 import { type AuthTokenPurpose } from '@prisma/client';
 import argon2 from 'argon2';
@@ -85,13 +88,16 @@ export class AuthService {
     return true;
   }
 
-  async verifyLogin(input: LoginInput, ip: string) {
+  async verifyLogin(input: LoginInput, ip: string, audience?: LoginAudience) {
     const email = input.email.toLowerCase();
     const key = `login:${ip}:${email}`;
     if (await this.limiter.exceeded(key, 10, 900)) {
       throw new AppException('RATE_LIMITED', '로그인 시도가 많습니다. 15분 뒤 다시 시도해 주세요.');
     }
-    const user = await this.prisma.user.findUnique({ where: { email } });
+    const user = await this.prisma.user.findUnique({
+      where: { email },
+      include: { managedClubs: { select: { clubId: true } } },
+    });
     const ok = await argon2.verify(user?.passwordHash ?? (await dummy()), input.password);
     if (!user || !user.passwordHash || !ok || user.status === 'withdrawn') {
       throw new AppException('VALIDATION', BAD_LOGIN);
@@ -99,10 +105,17 @@ export class AuthService {
     if (user.status === 'suspended') {
       throw new AppException('FORBIDDEN', '이용이 제한된 계정입니다. 센터에 문의해 주세요.');
     }
+    const operator = canEnterConsole({ ...user, managedClubIds: user.managedClubs.map((c) => c.clubId) });
+    if (audience === 'admin' && !operator)
+      throw new AppException('FORBIDDEN', '관리자 앱을 이용할 권한이 없습니다.');
+    const surface = audience ?? (operator ? 'admin' : 'user');
+    const { rule } = await readContact(this.prisma, surface);
+    checkContact(rule, user);
     if (
+      !rule &&
       !hasVerifiedContact(user) &&
       !defersOperatorContact(user) &&
-      (!isTemporaryMember(user) || (await this.prisma.clubManager.count({ where: { userId: user.id } })))
+      (!isTemporaryMember(user) || user.managedClubs.length)
     ) {
       throw new AppException('FORBIDDEN', '이메일 인증을 완료한 뒤 로그인할 수 있습니다.');
     }
@@ -110,17 +123,16 @@ export class AuthService {
     return user;
   }
 
-  async login(input: LoginInput, ip: string, userAgent?: string) {
-    const user = await this.verifyLogin(input, ip);
-    const session = await this.sessions.create(user.id, userAgent, defersOperatorContact(user));
-    const managed = await this.prisma.clubManager.findMany({
-      where: { userId: user.id },
-      select: { clubId: true },
-    });
+  async login(input: LoginInput, ip: string, userAgent?: string, audience?: LoginAudience) {
+    const user = await this.verifyLogin(input, ip, audience);
+    const managed = user.managedClubs;
+    const operator = canEnterConsole({ ...user, managedClubIds: managed.map((c) => c.clubId) });
+    const surface = audience ?? (operator ? 'admin' : 'user');
+    const session = await this.sessions.create(user.id, userAgent, surface === 'admin');
     return {
       user: {
         ...user,
-        permissionScope: await staffScope(this.prisma, user.id, user.roles),
+        permissionScope: await effectiveScope(this.prisma, user.id, user.roles),
         managedClubIds: managed.map((m) => m.clubId),
       },
       ...session,

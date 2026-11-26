@@ -112,3 +112,26 @@ describe('내 신청', () => {
     expect(Array.isArray(res.body.data)).toBe(true);
   });
 });
+
+describe('신청 내용 수정', () => {
+  it('작성자만 변경하며 동시 편집과 재전송에도 원문과 수정 이력을 보존한다', async () => {
+    const target = await createProgram(t);
+    const { agent } = await signedIn(t);
+    const other = await signedIn(t);
+    const reviewer = await signedIn(t, ['admin']);
+    const result = await agent.post(`/api/v1/programs/${target.id}/applications`).send(apply).expect(201);
+    const path = `/api/v1/me/applications/${result.body.data.id}`;
+    const edits = ['첫 번째로 변경한 신청 내용입니다.', '두 번째로 변경한 신청 내용입니다.'];
+    await other.agent.patch(path).send({ value: edits[0], revision: 0 }).expect(404);
+    const attempts = await Promise.all(edits.map((value) => agent.patch(path).send({ value, revision: 0 })));
+    expect(attempts.map((r) => r.status).sort()).toEqual([200, 409]);
+    const saved = attempts.find((r) => r.status === 200)!.body.data;
+    expect(saved.contentEdits).toEqual([{ previous: apply.note, next: saved.note, at: expect.any(String) }]);
+    const retry = await agent.patch(path).send({ value: saved.note, revision: 0 }).expect(200);
+    expect(retry.body.data.contentEdits).toEqual(saved.contentEdits);
+    const next = await agent.patch(path).send({ value: apply.note, revision: 1 }).expect(200);
+    expect(next.body.data.contentEdits).toHaveLength(2);
+    const admin = await reviewer.agent.get(`/api/v1/admin/applications/${saved.id}`).expect(200);
+    expect(admin.body.data.contentEdits).toEqual(next.body.data.contentEdits);
+  });
+});

@@ -351,6 +351,10 @@ export const rejectReasonSchema = z.object({
 export type LoginInput = z.infer<typeof loginSchema>;
 export type SignupInput = z.infer<typeof signupSchema>;
 export type ProfileInput = z.infer<typeof profileSchema>;
+const revision = z.number().int().nonnegative();
+export const programNoteEditSchema = z.object({ value: programApplySchema.shape.note, revision });
+export const clubMotivationEditSchema = z.object({ value: clubApplySchema.shape.motivation, revision });
+
 export type ProgramApplyInput = z.infer<typeof programApplySchema>;
 export type ClubApplyInput = z.infer<typeof clubApplySchema>;
 export type NoticeFormInput = z.infer<typeof noticeFormSchema>;

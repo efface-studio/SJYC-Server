@@ -1,5 +1,7 @@
+import type { ApplicationEditInput } from '../shared/domain/types';
+import { clubMotivationEditSchema } from '../shared/domain/schemas';
 import { OpenActivity } from '../common/auth';
-import { Body, Controller, Get, Module, Param, Post } from '@nestjs/common';
+import { Body, Controller, Get, Module, Param, Patch, Post } from '@nestjs/common';
 import type { User as UserRow } from '@prisma/client';
 import { CurrentUser, Public } from '../common/auth';
 import { apiInput, ZodPipe } from '../common/zod.pipe';
@@ -45,6 +47,15 @@ export class ClubsController {
   @Get('me/clubs')
   mine(@CurrentUser() me: UserRow) {
     return this.clubs.mine(me.id);
+  }
+
+  @Patch('me/club-applications/:id')
+  editApplication(
+    @CurrentUser() me: UserRow,
+    @Param('id') id: string,
+    @Body(new ZodPipe(clubMotivationEditSchema)) input: ApplicationEditInput,
+  ) {
+    return this.clubs.editApplication(me.id, id, input);
   }
 
   @Get('me/club-applications')

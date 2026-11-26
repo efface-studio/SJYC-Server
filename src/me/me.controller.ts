@@ -13,6 +13,8 @@ import { type ProfileInput, profileSchema } from '../shared/domain/schemas';
 import type { ConsentRecord, Notification, User } from '../shared/domain/types';
 import { toUser } from '../users/user.mapper';
 
+import { phoneUpdate } from '../auth/login-contact';
+import { AppException } from '../common/app-exception';
 import { normalizePhoto, photoInput } from './profile-photo';
 
 const preferenceInput = z.object({ kind: z.enum(NotificationKind), enabled: z.boolean() });
@@ -69,14 +71,20 @@ export class MeController {
     const consents = prev.some((c) => c.key === 'marketing')
       ? prev.map((c) => (c.key === 'marketing' && c.agreed !== input.agreeMarketing ? marketing : c))
       : [...prev, marketing];
-    const u = await this.prisma.user.update({
-      where: { id: me.id },
-      data: {
-        name: input.name,
-        phone: input.phone || null,
-        consents: consents as unknown as Prisma.InputJsonValue,
-      },
-    });
+    const u = await this.prisma.user
+      .update({
+        where: { id: me.id, phone: me.phone },
+        data: {
+          name: input.name,
+          ...phoneUpdate(me.phone, input.phone || null),
+          consents: consents as unknown as Prisma.InputJsonValue,
+        },
+      })
+      .catch((err: unknown) => {
+        if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2025')
+          throw new AppException('CONFLICT', '회원 정보가 변경되었습니다. 다시 확인해 주세요.');
+        throw err;
+      });
     return toUser(u);
   }
 

@@ -1,3 +1,4 @@
+import type { ApplicationEditInput } from '../shared/domain/types';
 import { Injectable } from '@nestjs/common';
 import { Prisma, type User as UserRow } from '@prisma/client';
 import { AppException } from '../common/app-exception';
@@ -131,6 +132,36 @@ export class ProgramsService {
       if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002') throw duplicate();
       throw e;
     }
+  }
+
+  async editApplication(userId: string, id: string, input: ApplicationEditInput) {
+    return this.prisma.$transaction(async (tx) => {
+      // 같은 신청의 수정 순서를 직렬화한다. 소유자가 아닌 경우 행을 잠그지 않는다.
+      await tx.$queryRaw`SELECT id FROM "ProgramApplication" WHERE id = ${id} AND "userId" = ${userId} FOR UPDATE`;
+      const row = await tx.programApplication.findFirst({
+        where: { id, userId },
+        include: { program: true },
+      });
+      if (!row) throw NOT_FOUND();
+      const current = toApplication(row);
+      if (current.note === input.value) return current;
+      const edits = current.contentEdits ?? [];
+      if (edits.length !== input.revision) {
+        throw new AppException('CONFLICT', '신청 내용이 변경되었습니다. 다시 확인해 주세요.');
+      }
+      const updated = await tx.programApplication.update({
+        where: { id },
+        data: {
+          note: input.value,
+          contentEdits: [
+            ...edits,
+            { previous: current.note, next: input.value, at: new Date().toISOString() },
+          ],
+        },
+        include: { program: true },
+      });
+      return toApplication(updated);
+    });
   }
 
   async mine(userId: string): Promise<ProgramApplication[]> {
