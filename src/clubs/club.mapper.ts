@@ -1,3 +1,4 @@
+import type { ApplicationContentEdit } from '../shared/domain/types';
 import type { ClubApplication as ApplicationRow, Club as ClubRow, ClubPost as PostRow } from '@prisma/client';
 import type { Club, ClubActivity, ClubApplication, ClubPost, MediaPhoto } from '../shared/domain/types';
 
@@ -36,6 +37,7 @@ export const toClubApplication = (a: ApplicationRow & { club: Pick<ClubRow, 'nam
   userId: a.userId,
   applicantName: a.applicantName,
   motivation: a.motivation,
+  contentEdits: a.contentEdits as unknown as ApplicationContentEdit[],
   status: a.status,
   reason: a.reason,
   createdAt: a.createdAt.toISOString(),

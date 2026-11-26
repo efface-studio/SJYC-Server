@@ -104,3 +104,38 @@ describe('가입 신청', () => {
     expect(await t.prisma.clubApplication.count({ where: { clubId: c.id } })).toBe(1);
   });
 });
+
+describe('신청 내용 수정', () => {
+  it('작성자만 변경하며 동시 편집과 재전송에도 원문과 수정 이력을 보존한다', async () => {
+    const target = await createClub();
+    const { agent } = await signedIn(t);
+    const other = await signedIn(t);
+    const reviewer = await signedIn(t, ['admin']);
+    const result = await agent.post(`/api/v1/clubs/${target.id}/applications`).send(apply).expect(201);
+    const path = `/api/v1/me/club-applications/${result.body.data.id}`;
+    const edits = ['첫 번째로 변경한 신청 내용입니다.', '두 번째로 변경한 신청 내용입니다.'];
+    await other.agent.patch(path).send({ value: edits[0], revision: 0 }).expect(404);
+    const attempts = await Promise.all(edits.map((value) => agent.patch(path).send({ value, revision: 0 })));
+    expect(attempts.map((r) => r.status).sort()).toEqual([200, 409]);
+    const saved = attempts.find((r) => r.status === 200)!.body.data;
+    expect(saved.contentEdits).toEqual([
+      { previous: apply.motivation, next: saved.motivation, at: expect.any(String) },
+    ]);
+    const retry = await agent.patch(path).send({ value: saved.motivation, revision: 0 }).expect(200);
+    expect(retry.body.data.contentEdits).toEqual(saved.contentEdits);
+    const next = await agent.patch(path).send({ value: apply.motivation, revision: 1 }).expect(200);
+    expect(next.body.data.contentEdits).toHaveLength(2);
+    const list = await reviewer.agent
+      .get('/api/v1/admin/club-applications')
+      .query({ clubId: target.id, pageSize: 1 })
+      .expect(200);
+    expect(list.body.data.total).toBe(1);
+    expect(list.body.data.items[0].contentEdits).toEqual(next.body.data.contentEdits);
+    const second = await createClub();
+    const empty = await reviewer.agent
+      .get('/api/v1/admin/club-applications')
+      .query({ clubId: second.id })
+      .expect(200);
+    expect(empty.body.data.total).toBe(0);
+  });
+});

@@ -1,5 +1,7 @@
+import type { ApplicationEditInput } from '../shared/domain/types';
+import { programNoteEditSchema } from '../shared/domain/schemas';
 import { OpenActivity } from '../common/auth';
-import { Body, Controller, Get, Module, Param, Post, Query } from '@nestjs/common';
+import { Body, Controller, Get, Module, Param, Patch, Post, Query } from '@nestjs/common';
 import type { User as UserRow } from '@prisma/client';
 import { z } from 'zod';
 import { CurrentUser, Public } from '../common/auth';
@@ -44,6 +46,15 @@ export class ProgramsController {
     @Body(new ZodPipe(apiInput(programApplySchema))) input: ProgramApplyInput,
   ) {
     return this.programs.apply(me, id, input);
+  }
+
+  @Patch('me/applications/:id')
+  editApplication(
+    @CurrentUser() me: UserRow,
+    @Param('id') id: string,
+    @Body(new ZodPipe(programNoteEditSchema)) input: ApplicationEditInput,
+  ) {
+    return this.programs.editApplication(me.id, id, input);
   }
 
   @Get('me/applications')

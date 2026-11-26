@@ -213,6 +213,7 @@ model ProgramApplication {
   applicantName String
   phone         String
   note          String
+  contentEdits  Json              @default("[]")
   status        ApplicationStatus @default(submitted)
   /// StatusHistoryEntry[]
   history       Json              @default("[]")
@@ -348,6 +349,7 @@ model ClubApplication {
   user          User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
   applicantName String
   motivation    String
+  contentEdits  Json              @default("[]")
   status        ClubApplicationStatus @default(pending)
   reason        String?
   createdAt     DateTime              @default(now())
