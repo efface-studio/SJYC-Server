@@ -59,5 +59,8 @@ jobs:
       - name: Test
         run: pnpm test
 
+      - name: Verify initial developer enrollment on isolated PostgreSQL
+        run: python3 test/first-developer.py
+
       - name: Build
         run: pnpm build
