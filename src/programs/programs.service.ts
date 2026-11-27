@@ -1,6 +1,6 @@
 import type { ApplicationEditInput } from '../shared/domain/types';
 import { Injectable } from '@nestjs/common';
-import { Prisma, type User as UserRow } from '@prisma/client';
+import { Prisma, type Program as ProgramRow, type User as UserRow } from '@prisma/client';
 import { AppException } from '../common/app-exception';
 import { PrismaService, type Tx } from '../prisma/prisma.service';
 import { computeRecruitStatus } from '../shared/domain/program';
@@ -51,40 +51,41 @@ export class ProgramsService {
     return rows.map(({ id, name, group }) => ({ id, name, group }));
   }
 
-  /**
-   * 게시된 프로그램 — 모집 중 → 예정 → 마감 순, 같은 상태는 모집 마감일 순.
-   * ponytail: 모집 상태가 시각·정원으로 계산되는 값이라 메모리에서 거른다. 프로그램이 수천 개를 넘으면 상태를 열로 두고 DB 에서 거른다.
-   */
+  /** 같은 시각과 DB 스냅샷으로 모집 상태, 전체 건수, 페이지를 계산한다. */
   async list(q: ProgramQuery): Promise<Page<Program>> {
-    const text = q.q?.trim();
-    const rows = await this.prisma.program.findMany({
-      where: {
-        status: 'published',
-        ...(q.categoryId ? { categoryId: q.categoryId } : {}),
-        ...(text
-          ? {
-              OR: [
-                { title: { contains: text, mode: 'insensitive' } },
-                { summary: { contains: text, mode: 'insensitive' } },
-                { target: { contains: text, mode: 'insensitive' } },
-              ],
-            }
-          : {}),
-      },
-    });
     const now = new Date();
-    const list = rows
-      .map((p) => toProgram(p, now))
-      .filter((p) => !q.recruitStatus || p.recruitStatus === q.recruitStatus)
-      .sort(
-        (a, b) =>
-          ORDER[a.recruitStatus] - ORDER[b.recruitStatus] ||
-          Date.parse(a.recruitEndsAt) - Date.parse(b.recruitEndsAt),
+    // Prisma의 DateTime 열은 UTC timestamp다. 경계 시각에서는 모집 중으로 판정한다.
+    const instant = Prisma.sql`(${now}::timestamptz AT TIME ZONE 'UTC')`;
+    const rank = Prisma.sql`CASE
+      WHEN "recruitStartsAt" > ${instant} THEN 1
+      WHEN "recruitEndsAt" < ${instant} THEN 3
+      WHEN "appliedCount" >= capacity THEN 2
+      ELSE 0 END`;
+    const filters = [Prisma.sql`status = 'published'`];
+    if (q.categoryId) filters.push(Prisma.sql`"categoryId" = ${q.categoryId}`);
+    const text = q.q?.trim();
+    if (text) {
+      const pattern = `%${text}%`;
+      filters.push(
+        Prisma.sql`(title ILIKE ${pattern} OR summary ILIKE ${pattern} OR target ILIKE ${pattern})`,
       );
-    const start = (q.page - 1) * q.pageSize;
+    }
+    if (q.recruitStatus) filters.push(Prisma.sql`${rank} = ${ORDER[q.recruitStatus]}`);
+    const where = Prisma.join(filters, ' AND ');
+    const offset = (BigInt(q.page) - 1n) * BigInt(q.pageSize);
+    const [rows, [count]] = await this.prisma.$transaction(
+      [
+        this.prisma.$queryRaw<ProgramRow[]>`
+        SELECT * FROM "Program" WHERE ${where}
+        ORDER BY ${rank}, "recruitEndsAt", id
+        LIMIT ${q.pageSize} OFFSET ${offset}`,
+        this.prisma.$queryRaw<{ total: bigint }[]>`SELECT count(*) AS total FROM "Program" WHERE ${where}`,
+      ],
+      { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead },
+    );
     return {
-      items: list.slice(start, start + q.pageSize),
-      total: list.length,
+      items: rows.map((row) => toProgram(row, now)),
+      total: Number(count!.total),
       page: q.page,
       pageSize: q.pageSize,
     };
