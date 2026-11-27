@@ -36,6 +36,33 @@ describe('프로그램 조회', () => {
     const one = await t.http.get(`/api/v1/programs/${open.id}`).expect(200);
     expect(one.body.data).toMatchObject({ id: open.id, recruitStatus: 'open', appliedCount: 0 });
   });
+
+  it('같은 마감일의 페이지 순서, 정원 마감 필터, 마지막 페이지 이후의 건수를 보존한다', async () => {
+    const tag = `페이지${Date.now()}`;
+    const first = await createProgram(t, { title: tag + ' A' });
+    const second = await createProgram(t, { title: tag + ' B' });
+    const full = await createProgram(t, { title: tag + ' C', capacity: 1 });
+    await t.prisma.program.updateMany({
+      where: { id: { in: [first.id, second.id, full.id] } },
+      data: { recruitEndsAt: first.recruitEndsAt },
+    });
+    await t.prisma.program.update({ where: { id: full.id }, data: { appliedCount: 1 } });
+    const list = (page: number, recruitStatus?: string) =>
+      t.http
+        .get('/api/v1/programs')
+        .query({ q: tag, categoryId: first.categoryId, page, pageSize: 1, recruitStatus })
+        .expect(200);
+    const expected = [first.id, second.id].sort();
+    for (const [index, id] of [...expected, full.id].entries()) {
+      const res = await list(index + 1);
+      expect(res.body.data).toMatchObject({ total: 3, items: [{ id }] });
+    }
+    expect((await list(4)).body.data).toMatchObject({ total: 3, items: [] });
+    expect((await list(1, 'full')).body.data).toMatchObject({
+      total: 1,
+      items: [{ id: full.id, recruitStatus: 'full' }],
+    });
+  });
 });
 
 describe('프로그램 신청', () => {
